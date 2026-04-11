@@ -1,4 +1,5 @@
 use crate::approval::{check_tool_approval, ApprovalResult};
+use crate::compact::compact_messages;
 use crate::llm::LlmClient;
 use crate::session::SessionStats;
 use crate::tools::{execute_tool, tool_definitions};
@@ -13,16 +14,23 @@ pub struct Agent {
     pub stats: SessionStats,
     auto_approve: bool,
     session_approved_patterns: Vec<String>,
+    max_context_tokens: usize,
 }
 
 impl Agent {
-    pub fn new(client: LlmClient, system_prompt: &str, auto_approve: bool) -> Self {
+    pub fn new(
+        client: LlmClient,
+        system_prompt: &str,
+        auto_approve: bool,
+        max_context_tokens: usize,
+    ) -> Self {
         Self {
             client,
             messages: vec![Message::system(system_prompt)],
             stats: SessionStats::default(),
             auto_approve,
             session_approved_patterns: Vec::new(),
+            max_context_tokens,
         }
     }
 
@@ -32,6 +40,13 @@ impl Agent {
         let tools = tool_definitions();
 
         for round in 0..MAX_TOOL_ROUNDS {
+            // Context compaction check before each LLM call
+            if let Some(compacted) =
+                compact_messages(&self.client, &self.messages, self.max_context_tokens).await?
+            {
+                self.messages = compacted;
+            }
+
             let (assistant_msg, completion_stats) =
                 self.client.chat(&self.messages, &tools).await?;
 
@@ -49,11 +64,12 @@ impl Agent {
                     0.0
                 };
                 eprintln!(
-                    "  {} {} | {} | {:.0} tok/s",
+                    "  {} {} | {} | {:.0} tok/s | ~{} ctx",
                     "tokens:".dimmed(),
                     format!("{}in", completion_stats.prompt_tokens).dimmed(),
                     format!("{}out", completion_stats.completion_tokens).dimmed(),
-                    tps
+                    tps,
+                    self.context_tokens()
                 );
             }
 
@@ -112,16 +128,6 @@ impl Agent {
                 self.messages
                     .push(Message::tool_result(&tc.id, name, &result));
             }
-
-            // Check context size (rough estimate)
-            let est_tokens: usize = self.messages.iter().map(|m| m.estimated_tokens()).sum();
-            if est_tokens > 100_000 {
-                eprintln!(
-                    "  {} ~{} tokens in context",
-                    "warning:".yellow().bold(),
-                    est_tokens
-                );
-            }
         }
 
         eprintln!(
@@ -135,16 +141,8 @@ impl Agent {
         &self.messages
     }
 
-    pub fn message_count(&self) -> usize {
-        self.messages.len()
-    }
-
     pub fn context_tokens(&self) -> usize {
         self.messages.iter().map(|m| m.estimated_tokens()).sum()
-    }
-
-    pub fn model_name(&self) -> &str {
-        self.client.model_name()
     }
 }
 
@@ -182,7 +180,8 @@ fn print_tool_call(name: &str, args: &serde_json::Value) {
 
     // For search_replace, show a mini diff
     if name == "search_replace" {
-        if let (Some(search), Some(replace)) = (args["search"].as_str(), args["replace"].as_str())
+        if let (Some(search), Some(replace)) =
+            (args["search"].as_str(), args["replace"].as_str())
         {
             let search_preview: String = search.lines().take(3).collect::<Vec<_>>().join("\\n");
             let replace_preview: String = replace.lines().take(3).collect::<Vec<_>>().join("\\n");

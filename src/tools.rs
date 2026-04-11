@@ -1,6 +1,8 @@
 use crate::types::*;
+use colored::Colorize;
 use serde_json::json;
 use std::path::Path;
+use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
 pub fn tool_definitions() -> Vec<AvailableTool> {
@@ -76,7 +78,8 @@ pub fn tool_definitions() -> Vec<AvailableTool> {
             tool_type: "function".into(),
             function: FunctionDef {
                 name: "search_replace".into(),
-                description: "Search and replace text in a file. Provide exact match strings.".into(),
+                description:
+                    "Search and replace text in a file. Provide exact match strings.".into(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -101,7 +104,9 @@ pub fn tool_definitions() -> Vec<AvailableTool> {
             tool_type: "function".into(),
             function: FunctionDef {
                 name: "grep".into(),
-                description: "Search for a pattern in files. Returns matching lines with file paths.".into(),
+                description:
+                    "Search for a pattern in files. Respects .gitignore. Returns matching lines."
+                        .into(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -126,7 +131,7 @@ pub fn tool_definitions() -> Vec<AvailableTool> {
             tool_type: "function".into(),
             function: FunctionDef {
                 name: "glob".into(),
-                description: "Find files matching a glob pattern.".into(),
+                description: "Find files matching a glob pattern. Skips .git, node_modules, target directories.".into(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -158,53 +163,108 @@ async fn tool_bash(args: &serde_json::Value) -> String {
     let command = args["command"].as_str().unwrap_or("");
     let timeout_secs = args["timeout"].as_u64().unwrap_or(120);
 
-    let result = tokio::time::timeout(
+    let mut child = match Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("TERM", "dumb")
+        .env("GIT_PAGER", "cat")
+        .env("PAGER", "cat")
+        .env("LESS", "-FX")
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => return format!("Failed to spawn command: {}", e),
+    };
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let mut stdout_buf = String::new();
+    let mut stderr_buf = String::new();
+
+    // Stream stdout line by line for live feedback
+    let stdout_handle = tokio::spawn(async move {
+        let mut collected = String::new();
+        if let Some(stdout) = stdout {
+            let reader = tokio::io::BufReader::new(stdout);
+            let mut lines = reader.lines();
+            let mut line_count = 0;
+            while let Ok(Some(line)) = lines.next_line().await {
+                // Show live output (first 20 lines, then dots)
+                line_count += 1;
+                if line_count <= 20 {
+                    eprintln!("    {}", line.dimmed());
+                } else if line_count == 21 {
+                    eprintln!("    {}", "... (streaming)".dimmed());
+                }
+                collected.push_str(&line);
+                collected.push('\n');
+                if collected.len() > 16_000 {
+                    collected.push_str("...\n(truncated)\n");
+                    break;
+                }
+            }
+        }
+        collected
+    });
+
+    let stderr_handle = tokio::spawn(async move {
+        let mut collected = String::new();
+        if let Some(stderr) = stderr {
+            let reader = tokio::io::BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                collected.push_str(&line);
+                collected.push('\n');
+                if collected.len() > 4_000 {
+                    collected.push_str("...\n(truncated)\n");
+                    break;
+                }
+            }
+        }
+        collected
+    });
+
+    let timeout_result = tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
-        Command::new("bash")
-            .arg("-c")
-            .arg(command)
-            .env("TERM", "dumb")
-            .env("GIT_PAGER", "cat")
-            .env("PAGER", "cat")
-            .output(),
+        child.wait(),
     )
     .await;
 
-    match result {
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let code = output.status.code().unwrap_or(-1);
-
-            let mut result = String::new();
-            if code != 0 {
-                result.push_str(&format!("Exit code: {}\n", code));
-            }
-            if !stdout.is_empty() {
-                // Truncate to 16KB
-                let s = if stdout.len() > 16_000 {
-                    format!("{}...\n(truncated)", &stdout[..16_000])
-                } else {
-                    stdout.to_string()
-                };
-                result.push_str(&s);
-            }
-            if !stderr.is_empty() {
-                let s = if stderr.len() > 4_000 {
-                    format!("{}...\n(truncated)", &stderr[..4_000])
-                } else {
-                    stderr.to_string()
-                };
-                result.push_str(&format!("STDERR: {}", s));
-            }
-            if result.is_empty() {
-                "(no output)".to_string()
-            } else {
-                result
-            }
+    let code = match timeout_result {
+        Ok(Ok(status)) => status.code().unwrap_or(-1),
+        Ok(Err(e)) => return format!("Failed to wait for command: {}", e),
+        Err(_) => {
+            let _ = child.kill().await;
+            return format!("Command timed out after {}s", timeout_secs);
         }
-        Ok(Err(e)) => format!("Failed to run command: {}", e),
-        Err(_) => format!("Command timed out after {}s", timeout_secs),
+    };
+
+    if let Ok(s) = stdout_handle.await {
+        stdout_buf = s;
+    }
+    if let Ok(s) = stderr_handle.await {
+        stderr_buf = s;
+    }
+
+    let mut result = String::new();
+    if code != 0 {
+        result.push_str(&format!("Exit code: {}\n", code));
+    }
+    if !stdout_buf.is_empty() {
+        result.push_str(&stdout_buf);
+    }
+    if !stderr_buf.is_empty() {
+        result.push_str(&format!("STDERR: {}", stderr_buf));
+    }
+    if result.is_empty() {
+        "(no output)".to_string()
+    } else {
+        result
     }
 }
 
@@ -275,28 +335,59 @@ async fn tool_grep(args: &serde_json::Value) -> String {
     let path = args["path"].as_str().unwrap_or(".");
     let include = args["include"].as_str().unwrap_or("");
 
-    let mut cmd = Command::new("grep");
-    cmd.arg("-rn").arg("--color=never");
+    // Prefer ripgrep (rg) if available — it respects .gitignore by default
+    let has_rg = Command::new("which")
+        .arg("rg")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
-    if !include.is_empty() {
-        cmd.arg("--include").arg(include);
-    }
+    let output = if has_rg {
+        let mut cmd = Command::new("rg");
+        cmd.arg("-n").arg("--color=never").arg("--no-heading");
 
-    // Exclude common noise
-    cmd.arg("--exclude-dir=.git")
-        .arg("--exclude-dir=node_modules")
-        .arg("--exclude-dir=target")
-        .arg("--exclude-dir=__pycache__")
-        .arg(pattern)
-        .arg(path);
+        if !include.is_empty() {
+            cmd.arg("-g").arg(include);
+        }
 
-    match cmd.output().await {
+        cmd.arg(pattern).arg(path);
+        cmd.output().await
+    } else {
+        // Fallback to grep with manual .gitignore exclusions
+        let mut cmd = Command::new("grep");
+        cmd.arg("-rn").arg("--color=never");
+
+        if !include.is_empty() {
+            cmd.arg("--include").arg(include);
+        }
+
+        cmd.arg("--exclude-dir=.git")
+            .arg("--exclude-dir=node_modules")
+            .arg("--exclude-dir=target")
+            .arg("--exclude-dir=__pycache__")
+            .arg("--exclude-dir=.venv")
+            .arg("--exclude-dir=dist")
+            .arg("--exclude-dir=build")
+            .arg("--exclude=*.pyc")
+            .arg("--exclude=*.lock")
+            .arg(pattern)
+            .arg(path);
+
+        cmd.output().await
+    };
+
+    match output {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.is_empty() {
                 "No matches found.".to_string()
             } else if stdout.len() > 16_000 {
-                format!("{}...\n(truncated, {} total bytes)", &stdout[..16_000], stdout.len())
+                format!(
+                    "{}...\n(truncated, {} total bytes)",
+                    &stdout[..16_000],
+                    stdout.len()
+                )
             } else {
                 stdout.to_string()
             }
@@ -308,12 +399,33 @@ async fn tool_grep(args: &serde_json::Value) -> String {
 fn tool_glob(args: &serde_json::Value) -> String {
     let pattern = args["pattern"].as_str().unwrap_or("");
 
+    // Skip common noise directories
+    const SKIP_DIRS: &[&str] = &[
+        ".git",
+        "node_modules",
+        "target",
+        "__pycache__",
+        ".venv",
+        "dist",
+        "build",
+        ".next",
+    ];
+
     match glob::glob(pattern) {
         Ok(entries) => {
             let mut results: Vec<String> = Vec::new();
             for entry in entries.take(500) {
                 match entry {
-                    Ok(path) => results.push(path.display().to_string()),
+                    Ok(path) => {
+                        let path_str = path.display().to_string();
+                        // Skip noise directories
+                        let should_skip = SKIP_DIRS
+                            .iter()
+                            .any(|d| path_str.contains(&format!("/{}/", d)));
+                        if !should_skip {
+                            results.push(path_str);
+                        }
+                    }
                     Err(e) => results.push(format!("(error: {})", e)),
                 }
             }

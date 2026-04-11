@@ -1,5 +1,6 @@
 mod agent;
 mod approval;
+mod compact;
 mod config;
 mod llm;
 mod session;
@@ -223,7 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = LlmClient::new(&api_base, &api_key, &model, config.default.temperature);
     let system_prompt = build_system_prompt();
-    let mut agent = Agent::new(client, &system_prompt, auto_approve);
+    let mut agent = Agent::new(client, &system_prompt, auto_approve, config.default.max_context_tokens);
 
     // Create session for persistence
     let mut current_session = Session::new(&model, &provider_name);
@@ -236,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 current_session = s;
                 // Rebuild agent with loaded messages
                 let client = LlmClient::new(&api_base, &api_key, &model, config.default.temperature);
-                agent = Agent::new(client, &system_prompt, auto_approve);
+                agent = Agent::new(client, &system_prompt, auto_approve, config.default.max_context_tokens);
             }
             Err(e) => {
                 eprintln!("{} {}", "Failed to resume:".red(), e);
@@ -278,9 +279,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/clear" => {
                 let client =
                     LlmClient::new(&api_base, &api_key, &model, config.default.temperature);
-                agent = Agent::new(client, &system_prompt, auto_approve);
+                agent = Agent::new(client, &system_prompt, auto_approve, config.default.max_context_tokens);
                 current_session = Session::new(&model, &provider_name);
                 eprintln!("{}", "Context cleared.".dimmed());
+
                 continue;
             }
             "/stats" => {
