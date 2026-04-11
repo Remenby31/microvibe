@@ -3,21 +3,31 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::json;
 use std::io::Write;
+use std::time::Instant;
 
 pub struct LlmClient {
     client: Client,
     api_base: String,
     api_key: String,
     model: String,
+    temperature: f32,
+}
+
+#[derive(Debug, Default)]
+pub struct CompletionStats {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub duration_ms: u128,
 }
 
 impl LlmClient {
-    pub fn new(api_base: &str, api_key: &str, model: &str) -> Self {
+    pub fn new(api_base: &str, api_key: &str, model: &str, temperature: f32) -> Self {
         Self {
             client: Client::new(),
             api_base: api_base.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
+            temperature,
         }
     }
 
@@ -25,11 +35,12 @@ impl LlmClient {
         &self,
         messages: &[Message],
         tools: &[AvailableTool],
-    ) -> Result<Message, Box<dyn std::error::Error>> {
+    ) -> Result<(Message, CompletionStats), Box<dyn std::error::Error>> {
+        let start = Instant::now();
         let mut body = json!({
             "model": self.model,
             "messages": messages,
-            "temperature": 0.1,
+            "temperature": self.temperature,
             "stream": true,
         });
 
@@ -42,6 +53,7 @@ impl LlmClient {
             .client
             .post(format!("{}/chat/completions", self.api_base))
             .bearer_auth(&self.api_key)
+            .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .await?;
@@ -54,26 +66,36 @@ impl LlmClient {
 
         let mut content = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut usage = Usage::default();
         let mut stream = resp.bytes_stream();
+        let mut buffer = String::new();
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result?;
-            let text = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-            for line in text.lines() {
-                let line = line.trim();
+            // Process complete lines from buffer
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim().to_string();
+                buffer = buffer[newline_pos + 1..].to_string();
+
                 if !line.starts_with("data: ") {
                     continue;
                 }
                 let data = &line[6..];
                 if data == "[DONE]" {
-                    break;
+                    continue;
                 }
 
                 let parsed: StreamChunk = match serde_json::from_str(data) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
+
+                if let Some(u) = &parsed.usage {
+                    usage.prompt_tokens = u.prompt_tokens;
+                    usage.completion_tokens = u.completion_tokens;
+                }
 
                 for choice in &parsed.choices {
                     if let Some(delta) = &choice.delta {
@@ -117,7 +139,13 @@ impl LlmClient {
             println!();
         }
 
-        Ok(Message {
+        let stats = CompletionStats {
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            duration_ms: start.elapsed().as_millis(),
+        };
+
+        let msg = Message {
             role: Role::Assistant,
             content: if content.is_empty() {
                 None
@@ -131,7 +159,9 @@ impl LlmClient {
             },
             tool_call_id: None,
             name: None,
-        })
+        };
+
+        Ok((msg, stats))
     }
 
     pub fn model_name(&self) -> &str {

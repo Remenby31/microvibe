@@ -17,6 +17,7 @@ regex = "1"
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
 bytes = "1"
+toml = "0.8"
 
 [profile.release]
 opt-level = "z"

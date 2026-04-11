@@ -43,6 +43,16 @@ impl Message {
         }
     }
 
+    pub fn assistant(content: &str) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
     pub fn tool_result(tool_call_id: &str, name: &str, content: &str) -> Self {
         Self {
             role: Role::Tool,
@@ -51,6 +61,21 @@ impl Message {
             tool_call_id: Some(tool_call_id.to_string()),
             name: Some(name.to_string()),
         }
+    }
+
+    /// Rough token estimate (1 token ≈ 4 chars for English)
+    pub fn estimated_tokens(&self) -> usize {
+        let content_len = self.content.as_ref().map(|c| c.len()).unwrap_or(0);
+        let tool_len = self
+            .tool_calls
+            .as_ref()
+            .map(|tcs| {
+                tcs.iter()
+                    .map(|tc| tc.function.name.len() + tc.function.arguments.len() + 20)
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
+        (content_len + tool_len) / 4 + 10 // +10 for message overhead
     }
 }
 
@@ -85,15 +110,11 @@ pub struct FunctionDef {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ChatResponse {
-    pub choices: Vec<Choice>,
-    pub usage: Option<Usage>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct Choice {
+    #[allow(dead_code)]
     pub message: Option<AssistantMsg>,
     pub delta: Option<AssistantMsg>,
+    #[allow(dead_code)]
     pub finish_reason: Option<String>,
 }
 
@@ -103,7 +124,7 @@ pub struct AssistantMsg {
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
