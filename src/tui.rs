@@ -427,16 +427,13 @@ impl TuiApp {
 
         // Animated banner: braille cat (from Vibe) + info
         if self.show_banner {
-            // 7 animation frames — kitten blinks eyes and wags tail
-            // Modified from Vibe's petit_chat: pointier ears, bigger rounder eyes
+            // 5 animation frames — exact Vibe petit_chat
             const CAT_FRAMES: &[&[&str]] = &[
-                &["  ⡨⣒⠅  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡧⣇⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"],
-                &["  ⡨⣒⠅  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡥⣅⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // blink
-                &["  ⡨⣒⠅  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡧⣇⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"],
-                &[" ⢠⢪ ⠁  ⡔⢄⠔⡄", " ⢸⢸⣀⡔⢉⠱⣃⡧⣇⡣", " ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆"], // tail mid
-                &["⢔⡢⡈ ⠁  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡧⣇⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // tail left
-                &[" ⢠⢪ ⠁  ⡔⢄⠔⡄", " ⢸⢸⣀⡔⢉⠱⣃⡧⣇⡣", " ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆"], // tail mid
-                &["  ⡨⣒⠅  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡧⣇⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // home
+                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"],
+                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡠⣀⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // blink
+                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"],
+                &[" ⢠⢢    ⡔⢄⠔⡄", " ⢸⢸⣀⡔⢉⠱⣃⡢⣂⡣", " ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆"], // tail wag
+                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // home
             ];
             let frame_idx = (self.spinner_tick / 5) % CAT_FRAMES.len();
             let cat = CAT_FRAMES[frame_idx];
@@ -799,6 +796,8 @@ impl TuiApp {
             Color::Yellow
         } else if self.waiting {
             Color::DarkGray
+        } else if self.auto_approve {
+            Color::Red
         } else {
             Color::Green
         };
@@ -824,11 +823,11 @@ impl TuiApp {
             Span::styled(input_content, input_style),
         ]);
 
-        // Right-side label (like Vibe's "auto approve")
-        let right_label = if self.auto_approve {
-            " auto approve "
+        // Right-side label (like Vibe's "auto approve" / safe mode)
+        let (right_label, right_color) = if self.auto_approve {
+            (" auto approve ", Color::Red)
         } else {
-            ""
+            ("", Color::Green)
         };
 
         // CWD for bottom-right (like Vibe's "agentree" / path)
@@ -854,7 +853,7 @@ impl TuiApp {
 
         if !right_label.is_empty() {
             block = block.title_top(
-                Line::from(Span::styled(right_label, Style::default().fg(Color::Red)))
+                Line::from(Span::styled(right_label, Style::default().fg(right_color)))
                     .right_aligned(),
             );
         }
@@ -902,6 +901,11 @@ impl TuiApp {
             // Ctrl+Y: copy last assistant message to clipboard
             (KeyModifiers::CONTROL, KeyCode::Char('y')) => {
                 return KeyAction::CopyLast;
+            }
+            // Shift+Tab: cycle permission mode (like Vibe)
+            (KeyModifiers::SHIFT, KeyCode::BackTab) if !self.waiting => {
+                self.auto_approve = !self.auto_approve;
+                return KeyAction::None;
             }
             // Tab: accept completion or toggle collapse
             (_, KeyCode::Tab) if !self.waiting => {
