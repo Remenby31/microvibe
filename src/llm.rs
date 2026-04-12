@@ -235,9 +235,6 @@ impl LlmClient {
         ))
     }
 
-    pub fn model_name(&self) -> &str {
-        &self.model
-    }
 }
 
 /// Convert our Message to Anthropic format

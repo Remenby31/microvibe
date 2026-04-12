@@ -53,6 +53,10 @@ struct Cli {
     #[arg(long)]
     sessions: bool,
 
+    /// Continue the most recent session
+    #[arg(short = 'c', long = "continue")]
+    continue_session: bool,
+
     /// Initialize default config file
     #[arg(long)]
     init: bool,
@@ -270,19 +274,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create session for persistence
     let mut current_session = Session::new(&model, &provider_name);
 
-    // --resume: load previous session
+    // --resume: load previous session by ID
     if let Some(ref session_id) = cli.resume {
         match Session::load(session_id) {
             Ok(s) => {
                 eprintln!("{} {}", "Resumed session:".green(), &session_id[..8]);
                 current_session = s;
-                // Rebuild agent with loaded messages
                 let client = LlmClient::new(&api_base, &api_key, &model, config.default.temperature, backend);
                 agent = Agent::new(client, &system_prompt, auto_approve, config.default.max_context_tokens);
             }
             Err(e) => {
                 eprintln!("{} {}", "Failed to resume:".red(), e);
             }
+        }
+    }
+
+    // --continue: resume the most recent session
+    if cli.continue_session {
+        let sessions = Session::list_sessions();
+        if let Some((id, time, summary)) = sessions.first() {
+            match Session::load(id) {
+                Ok(s) => {
+                    eprintln!(
+                        "{} {} {} {}",
+                        "Continuing:".green(),
+                        &id[..8].cyan(),
+                        time.dimmed(),
+                        summary.dimmed()
+                    );
+                    current_session = s;
+                    let client = LlmClient::new(&api_base, &api_key, &model, config.default.temperature, backend);
+                    agent = Agent::new(client, &system_prompt, auto_approve, config.default.max_context_tokens);
+                }
+                Err(e) => {
+                    eprintln!("{} {}", "Failed to continue:".red(), e);
+                }
+            }
+        } else {
+            eprintln!("{}", "No previous sessions found.".dimmed());
         }
     }
 
@@ -459,6 +488,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 create_branch(cmd_args);
                 true
             }
+            "/run" => {
+                if cmd_args.is_empty() {
+                    eprintln!("{}", "Usage: /run <command>".dimmed());
+                } else {
+                    run_and_discuss(&mut agent, cmd_args).await;
+                }
+                true
+            }
             "/memory" => {
                 let mem = memory::load_memory();
                 if mem.is_empty() {
@@ -487,8 +524,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Expand @file mentions: @path/to/file gets replaced with file contents
         let expanded = expand_file_mentions(input);
 
-        if let Err(e) = agent.run_turn(&expanded).await {
-            eprintln!("{} {}", "Error:".red().bold(), e);
+        // Run turn with Ctrl+C cancellation
+        tokio::select! {
+            result = agent.run_turn(&expanded) => {
+                if let Err(e) = result {
+                    eprintln!("{} {}", "Error:".red().bold(), e);
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\n{}", "Turn cancelled (Ctrl+C). Type /quit to exit.".yellow());
+            }
         }
 
         // Auto-save after each turn
@@ -537,12 +582,39 @@ fn print_banner(model: &str, provider: &str) {
 "#
         .cyan()
     );
+    let cwd = std::env::current_dir()
+        .map(|p| {
+            let home = dirs::home_dir().unwrap_or_default();
+            let display = p.display().to_string();
+            let home_str = home.display().to_string();
+            if display.starts_with(&home_str) {
+                format!("~{}", &display[home_str.len()..])
+            } else {
+                display
+            }
+        })
+        .unwrap_or_else(|_| ".".into());
+
     eprintln!(
-        "  {} | {} | {} | {}",
-        "Ultra-light coding agent".dimmed(),
+        "  {} {} {}",
         model.yellow(),
-        provider.dimmed(),
-        "/help for commands".dimmed()
+        format!("({})", provider).dimmed(),
+        format!("| {}", cwd).dimmed()
+    );
+
+    // Show detected project info
+    let project_info = project::scan_project();
+    if !project_info.is_empty() {
+        for line in project_info.trim().lines() {
+            eprintln!("  {}", line.dimmed());
+        }
+    }
+
+    eprintln!(
+        "  {} | {} | {}",
+        "/help".dimmed(),
+        "Ctrl+C cancel".dimmed(),
+        "-c continue last".dimmed()
     );
 }
 
@@ -697,6 +769,69 @@ async fn run_tests(extra_args: &str) {
             }
         }
         Err(e) => eprintln!("{} {}", "Failed to run tests:".red(), e),
+    }
+}
+
+async fn run_and_discuss(agent: &mut Agent, command: &str) {
+    eprintln!("{} {}", "Running:".cyan().bold(), command);
+
+    let output = tokio::process::Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("TERM", "dumb")
+        .output()
+        .await;
+
+    match output {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let code = output.status.code().unwrap_or(-1);
+
+            // Show output to user
+            if !stdout.is_empty() {
+                let lines: Vec<&str> = stdout.lines().collect();
+                for line in lines.iter().take(30) {
+                    eprintln!("  {}", line);
+                }
+                if lines.len() > 30 {
+                    eprintln!("  {} ({} more lines)", "...".dimmed(), lines.len() - 30);
+                }
+            }
+            if code != 0 {
+                eprintln!("  {} exit code {}", "Error:".red(), code);
+            }
+
+            // Build context for discussion
+            let mut result = String::new();
+            if code != 0 {
+                result.push_str(&format!("Exit code: {}\n", code));
+            }
+            let truncated_stdout = if stdout.len() > 8000 {
+                format!("{}...\n(truncated)", &stdout[..8000])
+            } else {
+                stdout.to_string()
+            };
+            result.push_str(&truncated_stdout);
+            if !stderr.is_empty() {
+                let truncated_stderr = if stderr.len() > 2000 {
+                    format!("{}...\n(truncated)", &stderr[..2000])
+                } else {
+                    stderr.to_string()
+                };
+                result.push_str(&format!("\nSTDERR:\n{}", truncated_stderr));
+            }
+
+            let prompt = format!(
+                "I ran `{}` and got this output. Analyze it and tell me what's important:\n\n```\n{}\n```",
+                command, result
+            );
+
+            if let Err(e) = agent.run_turn(&prompt).await {
+                eprintln!("{} {}", "Error:".red(), e);
+            }
+        }
+        Err(e) => eprintln!("{} {}", "Failed to run:".red(), e),
     }
 }
 
@@ -1037,11 +1172,16 @@ Commands:
   /commit [msg]   Auto-generate commit message and commit (or use provided msg)
   /review         Ask agent to review current git changes
   /branch <name>  Create a new git branch
+  /run <cmd>      Run command and discuss output with agent
   /web <url>      Fetch URL content into context
   /export [file]  Export conversation as markdown (default: conversation.md)
   /test [args]    Detect test runner and run tests (cargo/npm/pytest/go)
   /memory         Show persistent memory contents
   /help           Show this help
+
+Shortcuts:
+  Ctrl+C          Cancel current turn (not exit)
+  -c              Continue most recent session
 
 Input:
   End a line with \ to continue on the next line (multiline)
