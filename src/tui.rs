@@ -757,9 +757,6 @@ impl TuiApp {
         // Input mode detection
         let (prompt, prompt_color) = if self.approval_pending {
             ("?", Color::Yellow)
-        } else if self.waiting {
-            let frame = SPINNER_BRAILLE[self.spinner_tick / 2 % SPINNER_BRAILLE.len()];
-            (frame, Color::Cyan)
         } else if self.input.starts_with('/') {
             ("/", Color::Magenta)
         } else if self.input.starts_with('!') {
