@@ -2,6 +2,7 @@ mod agent;
 mod approval;
 mod compact;
 mod config;
+mod events;
 mod llm;
 mod memory;
 mod pricing;

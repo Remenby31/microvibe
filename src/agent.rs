@@ -1,5 +1,6 @@
 use crate::approval::{check_tool_approval, ApprovalResult};
 use crate::compact::compact_messages;
+use crate::events::TuiEvent;
 use crate::llm::LlmClient;
 use crate::render;
 use crate::session::SessionStats;
@@ -203,11 +204,30 @@ impl Agent {
             // Execute mutating tools sequentially
             for (tc, args) in &mutating {
                 let name = &tc.function.name;
-                print_tool_call(name, args);
+                let detail = get_tool_detail(name, args);
+
+                if self.client.is_tui_mode() {
+                    self.client.emit(TuiEvent::ToolCallStart {
+                        name: name.to_string(),
+                        detail: detail.clone(),
+                    });
+                } else {
+                    print_tool_call(name, args);
+                }
 
                 let result = execute_tool(name, args).await;
                 self.stats.tool_calls += 1;
-                print_tool_result(&result);
+
+                let summary: String = result.lines().next().unwrap_or("").chars().take(80).collect();
+                if self.client.is_tui_mode() {
+                    self.client.emit(TuiEvent::ToolCallDone {
+                        name: name.to_string(),
+                        success: true,
+                        summary,
+                    });
+                } else {
+                    print_tool_result(&result);
+                }
 
                 self.messages
                     .push(Message::tool_result(&tc.id, name, &result));
@@ -259,6 +279,17 @@ fn extract_approval_prefix(name: &str, args: &serde_json::Value) -> String {
         }
     } else {
         String::new()
+    }
+}
+
+fn get_tool_detail(name: &str, args: &serde_json::Value) -> String {
+    match name {
+        "bash" => args["command"].as_str().unwrap_or("?").to_string(),
+        "read_file" | "write_file" | "search_replace" => args["path"].as_str().unwrap_or("?").to_string(),
+        "grep" => args["pattern"].as_str().unwrap_or("?").to_string(),
+        "glob" => args["pattern"].as_str().unwrap_or("?").to_string(),
+        "list_dir" => args["path"].as_str().unwrap_or(".").to_string(),
+        _ => name.to_string(),
     }
 }
 
