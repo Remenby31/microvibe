@@ -52,7 +52,9 @@ pub async fn run_tui(
     )));
 
     let mut app = TuiApp::new(model, provider_name, max_context_tokens);
-    app.auto_approve = auto_approve;
+    if auto_approve {
+        app.agent_mode = crate::tui::AgentMode::AutoApprove;
+    }
     let mut session = Session::new(model, provider_name);
 
     app.add_entry(ChatEntry::System(format!(
@@ -320,7 +322,7 @@ pub async fn run_tui(
                             app.add_entry(ChatEntry::System("Nothing to copy.".into()));
                         }
                     }
-                    KeyAction::ToggleCollapse | KeyAction::None => {}
+                    KeyAction::None => {}
                 }
             }
         }
