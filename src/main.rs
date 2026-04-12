@@ -264,17 +264,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprint!("{}", "\nmicrovibe> ".green().bold());
         io::stderr().flush()?;
 
-        let mut input = String::new();
-        if stdin.lock().read_line(&mut input)? == 0 {
-            break; // EOF
+        // Multiline input: lines ending with \ continue on the next line
+        let mut full_input = String::new();
+        loop {
+            let mut line = String::new();
+            if stdin.lock().read_line(&mut line)? == 0 {
+                if full_input.is_empty() {
+                    // EOF on first line = exit
+                    eprintln!("{}", "Bye!".dimmed());
+                    // Final save
+                    current_session.messages = agent.messages().to_vec();
+                    current_session.stats = agent.stats.clone();
+                    let _ = current_session.save();
+                    print_stats(&agent);
+                    return Ok(());
+                }
+                break;
+            }
+            let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+            if trimmed.ends_with('\\') {
+                // Continuation line
+                full_input.push_str(&trimmed[..trimmed.len() - 1]);
+                full_input.push('\n');
+                eprint!("{}", "       ... ".dimmed());
+                io::stderr().flush()?;
+                continue;
+            }
+            full_input.push_str(trimmed);
+            break;
         }
 
-        let input = input.trim();
+        let input = full_input.trim();
         if input.is_empty() {
             continue;
         }
 
-        match input {
+        // Handle slash commands
+        let handled = match input {
             "/quit" | "/exit" | "/q" => break,
             "/clear" => {
                 let client =
@@ -282,12 +308,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 agent = Agent::new(client, &system_prompt, auto_approve, config.default.max_context_tokens);
                 current_session = Session::new(&model, &provider_name);
                 eprintln!("{}", "Context cleared.".dimmed());
-
-                continue;
+                true
             }
             "/stats" => {
                 print_stats(&agent);
-                continue;
+                true
             }
             "/save" => {
                 current_session.messages = agent.messages().to_vec();
@@ -300,20 +325,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ),
                     Err(e) => eprintln!("{} {}", "Save failed:".red(), e),
                 }
-                continue;
+                true
             }
             "/sessions" => {
                 let sessions = Session::list_sessions();
-                for (id, time, summary) in &sessions {
-                    eprintln!("  {} {} {}", &id[..8].cyan(), time.dimmed(), summary);
+                if sessions.is_empty() {
+                    eprintln!("{}", "No sessions.".dimmed());
+                } else {
+                    for (id, time, summary) in &sessions {
+                        eprintln!("  {} {} {}", &id[..8].cyan(), time.dimmed(), summary);
+                    }
                 }
-                continue;
+                true
+            }
+            "/undo" => {
+                if agent.undo() {
+                    eprintln!("{} ({} checkpoints left)", "Undone.".green(), agent.checkpoint_count());
+                } else {
+                    eprintln!("{}", "Nothing to undo.".dimmed());
+                }
+                true
+            }
+            "/compact" => {
+                match agent.force_compact().await {
+                    Ok(_) => eprintln!("{} ~{} tokens", "Context:".green(), agent.context_tokens()),
+                    Err(e) => eprintln!("{} {}", "Compact failed:".red(), e),
+                }
+                true
+            }
+            "/context" => {
+                let msgs = agent.messages();
+                eprintln!("{} messages, ~{} tokens", msgs.len(), agent.context_tokens());
+                for (i, m) in msgs.iter().enumerate() {
+                    let role = format!("{:?}", m.role);
+                    let preview: String = m.content.as_deref().unwrap_or("").chars().take(60).collect();
+                    let tools = m.tool_calls.as_ref().map(|t| format!(" [{}tools]", t.len())).unwrap_or_default();
+                    eprintln!("  {:>3} {} {}{}", i, role.cyan(), preview.dimmed(), tools.dimmed());
+                }
+                true
             }
             "/help" => {
                 print_help();
-                continue;
+                true
             }
-            _ => {}
+            _ => false,
+        };
+
+        if handled {
+            continue;
         }
 
         if let Err(e) = agent.run_turn(input).await {
@@ -384,7 +443,13 @@ Commands:
   /stats        Show token usage and cost
   /save         Save current session
   /sessions     List saved sessions
+  /undo         Undo last turn (up to 10 checkpoints)
+  /compact      Force context compaction now
+  /context      Show conversation message list
   /help         Show this help
+
+Input:
+  End a line with \ to continue on the next line (multiline)
 
 Flags:
   --auto-approve   Skip tool approval prompts
