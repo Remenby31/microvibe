@@ -165,6 +165,35 @@ pub fn tool_definitions() -> Vec<AvailableTool> {
                 }),
             },
         },
+        AvailableTool {
+            tool_type: "function".into(),
+            function: FunctionDef {
+                name: "memory_read".into(),
+                description: "Read the persistent memory file. Memory persists across sessions.".into(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
+        },
+        AvailableTool {
+            tool_type: "function".into(),
+            function: FunctionDef {
+                name: "memory_write".into(),
+                description: "Append a note to persistent memory. Use for user preferences, project conventions, important context that should persist across sessions.".into(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The note to append to memory"
+                        }
+                    },
+                    "required": ["content"]
+                }),
+            },
+        },
     ]
 }
 
@@ -177,6 +206,8 @@ pub async fn execute_tool(name: &str, args: &serde_json::Value) -> String {
         "grep" => tool_grep(args).await,
         "glob" => tool_glob(args),
         "list_dir" => tool_list_dir(args),
+        "memory_read" => tool_memory_read(),
+        "memory_write" => tool_memory_write(args),
         _ => format!("Unknown tool: {}", name),
     }
 }
@@ -340,7 +371,31 @@ fn tool_search_replace(args: &serde_json::Value) -> String {
         Ok(content) => {
             let count = content.matches(search).count();
             if count == 0 {
-                return format!("No matches found for the search string in {}", path);
+                // Fuzzy hint: find the most similar line
+                let search_first_line = search.lines().next().unwrap_or(search).trim();
+                let mut best_match = ("", 0usize);
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    let sim = similarity(search_first_line, trimmed);
+                    if sim > best_match.1 {
+                        best_match = (line, sim);
+                    }
+                }
+
+                let hint = if best_match.1 > search_first_line.len() / 3 {
+                    format!(
+                        "\n\nClosest match in file ({}% similar):\n  \"{}\"",
+                        (best_match.1 * 100) / search_first_line.len().max(1),
+                        best_match.0.chars().take(120).collect::<String>()
+                    )
+                } else {
+                    String::new()
+                };
+
+                return format!(
+                    "No matches found for the search string in {}. Make sure whitespace and indentation match exactly.{}",
+                    path, hint
+                );
             }
             let new_content = content.replace(search, replace);
             match std::fs::write(path, &new_content) {
@@ -350,6 +405,28 @@ fn tool_search_replace(args: &serde_json::Value) -> String {
         }
         Err(e) => format!("Error reading {}: {}", path, e),
     }
+}
+
+/// Simple character-level similarity (longest common subsequence length)
+fn similarity(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.is_empty() || b.is_empty() {
+        return 0;
+    }
+    // Use simple matching character count (faster than LCS)
+    let mut score = 0;
+    let mut b_used = vec![false; b.len()];
+    for ac in &a {
+        for (j, bc) in b.iter().enumerate() {
+            if !b_used[j] && ac == bc {
+                score += 1;
+                b_used[j] = true;
+                break;
+            }
+        }
+    }
+    score
 }
 
 async fn tool_grep(args: &serde_json::Value) -> String {
@@ -534,5 +611,28 @@ fn format_size(bytes: u64) -> String {
         format!("{:.1}KB", bytes as f64 / 1024.0)
     } else {
         format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+fn tool_memory_read() -> String {
+    let content = crate::memory::load_memory();
+    if content.is_empty() {
+        "(memory is empty)".to_string()
+    } else {
+        content
+    }
+}
+
+fn tool_memory_write(args: &serde_json::Value) -> String {
+    let content = args["content"].as_str().unwrap_or("");
+    if content.is_empty() {
+        return "Nothing to write.".to_string();
+    }
+    match crate::memory::append_memory(content) {
+        Ok(_) => format!(
+            "Saved to memory ({} total bytes)",
+            crate::memory::load_memory().len()
+        ),
+        Err(e) => format!("Failed to write memory: {}", e),
     }
 }

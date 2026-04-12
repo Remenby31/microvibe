@@ -3,7 +3,9 @@ mod approval;
 mod compact;
 mod config;
 mod llm;
+mod memory;
 mod pricing;
+mod project;
 mod session;
 mod tools;
 mod types;
@@ -123,6 +125,20 @@ fn build_system_prompt() -> String {
         format!("\n\n{}", agents_docs)
     };
 
+    // Project scan
+    let project_info = project::scan_project();
+
+    // Persistent memory
+    let memory_content = memory::load_memory();
+    let memory_section = if memory_content.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\n# Memory (persistent across sessions)\n{}",
+            memory_content.trim()
+        )
+    };
+
     format!(
         r#"You are microvibe, a fast CLI coding agent.
 
@@ -134,7 +150,7 @@ fn build_system_prompt() -> String {
 - When writing code, prioritize correctness and simplicity.
 
 # Tools
-You have: bash, read_file, write_file, search_replace, grep, glob, list_dir.
+You have: bash, read_file, write_file, search_replace, grep, glob, list_dir, memory_read, memory_write.
 - bash: run shell commands. Use for builds, tests, git, installs.
 - read_file: read with line numbers. Prefer over `cat`.
 - write_file: create new files. Only for new files or complete rewrites.
@@ -142,7 +158,10 @@ You have: bash, read_file, write_file, search_replace, grep, glob, list_dir.
 - grep: search file contents with regex. Prefer over `grep` in bash.
 - glob: find files by pattern. Prefer over `find` in bash.
 - list_dir: list directory contents with sizes. Prefer over `ls` in bash.
+- memory_read: read persistent memory (survives across sessions).
+- memory_write: save a note to persistent memory. Use for user preferences, project conventions, and important context.
 When you need to read multiple files, call read_file for each in the same response — they execute in parallel.
+When the user tells you to remember something, use memory_write.
 
 # Safety
 - Never run destructive commands without confirming.
@@ -150,8 +169,8 @@ When you need to read multiple files, call read_file for each in the same respon
 - Don't introduce security vulnerabilities.
 
 # Working directory
-{cwd}{git_section}
-Platform: {platform}{agents_section}"#,
+{cwd}{git_section}{project_info}
+Platform: {platform}{agents_section}{memory_section}"#,
         platform = std::env::consts::OS,
     )
 }
@@ -432,6 +451,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 run_tests(cmd_args).await;
                 true
             }
+            "/review" => {
+                review_changes(&mut agent).await;
+                true
+            }
+            "/branch" => {
+                create_branch(cmd_args);
+                true
+            }
+            "/memory" => {
+                let mem = memory::load_memory();
+                if mem.is_empty() {
+                    eprintln!("{}", "Memory is empty. The agent can write to it with memory_write.".dimmed());
+                } else {
+                    eprintln!("{}", "Persistent memory:".cyan().bold());
+                    eprintln!("{}", mem);
+                }
+                true
+            }
             "/help" => {
                 print_help();
                 true
@@ -660,6 +697,64 @@ async fn run_tests(extra_args: &str) {
             }
         }
         Err(e) => eprintln!("{} {}", "Failed to run tests:".red(), e),
+    }
+}
+
+async fn review_changes(agent: &mut Agent) {
+    let diff = std::process::Command::new("git")
+        .args(["diff"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    let staged = std::process::Command::new("git")
+        .args(["diff", "--staged"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    let full_diff = format!("{}{}", staged, diff);
+
+    if full_diff.trim().is_empty() {
+        eprintln!("{}", "No changes to review.".dimmed());
+        return;
+    }
+
+    let truncated = if full_diff.len() > 12_000 {
+        format!("{}...\n(diff truncated)", &full_diff[..12_000])
+    } else {
+        full_diff
+    };
+
+    let prompt = format!(
+        "Review the following git diff. Look for:\n- Bugs or logic errors\n- Security issues\n- Missing error handling\n- Code style problems\n- Potential improvements\n\nBe concise. If everything looks good, say so.\n\n```diff\n{}\n```",
+        truncated
+    );
+
+    if let Err(e) = agent.run_turn(&prompt).await {
+        eprintln!("{} {}", "Review failed:".red(), e);
+    }
+}
+
+fn create_branch(name: &str) {
+    if name.is_empty() {
+        eprintln!("{}", "Usage: /branch <name>".dimmed());
+        return;
+    }
+
+    match std::process::Command::new("git")
+        .args(["checkout", "-b", name])
+        .output()
+    {
+        Ok(output) => {
+            if output.status.success() {
+                eprintln!("{} {}", "Created branch:".green(), name);
+            } else {
+                let err = String::from_utf8_lossy(&output.stderr);
+                eprintln!("{} {}", "Failed:".red(), err.trim());
+            }
+        }
+        Err(e) => eprintln!("{} {}", "Error:".red(), e),
     }
 }
 
@@ -940,9 +1035,12 @@ Commands:
   /context        Show conversation message list
   /diff           Show git diff of changes
   /commit [msg]   Auto-generate commit message and commit (or use provided msg)
+  /review         Ask agent to review current git changes
+  /branch <name>  Create a new git branch
   /web <url>      Fetch URL content into context
   /export [file]  Export conversation as markdown (default: conversation.md)
   /test [args]    Detect test runner and run tests (cargo/npm/pytest/go)
+  /memory         Show persistent memory contents
   /help           Show this help
 
 Input:
