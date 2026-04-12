@@ -427,15 +427,16 @@ impl TuiApp {
 
         // Animated banner: braille cat (from Vibe) + info
         if self.show_banner {
-            // 10 animation frames — cat blinks eyes and wags tail
+            // 7 animation frames — kitten blinks eyes and wags tail
+            // Modified from Vibe's petit_chat: pointier ears, bigger rounder eyes
             const CAT_FRAMES: &[&[&str]] = &[
-                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"],
-                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡠⣀⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // blink
-                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"],
-                &[" ⢠⢢    ⡔⢄⠔⡄", " ⢸⢸⣀⡔⢉⠱⣃⡢⣂⡣", " ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆"], // tail mid
-                &["⢔⡢⡀    ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // tail left
-                &[" ⢠⢢    ⡔⢄⠔⡄", " ⢸⢸⣀⡔⢉⠱⣃⡢⣂⡣", " ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆"], // tail mid
-                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // tail right (home)
+                &["  ⡨⣒⠅  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡧⣇⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"],
+                &["  ⡨⣒⠅  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡥⣅⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // blink
+                &["  ⡨⣒⠅  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡧⣇⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"],
+                &[" ⢠⢪ ⠁  ⡔⢄⠔⡄", " ⢸⢸⣀⡔⢉⠱⣃⡧⣇⡣", " ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆"], // tail mid
+                &["⢔⡢⡈ ⠁  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡧⣇⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // tail left
+                &[" ⢠⢪ ⠁  ⡔⢄⠔⡄", " ⢸⢸⣀⡔⢉⠱⣃⡧⣇⡣", " ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆"], // tail mid
+                &["  ⡨⣒⠅  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡧⣇⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // home
             ];
             let frame_idx = (self.spinner_tick / 5) % CAT_FRAMES.len();
             let cat = CAT_FRAMES[frame_idx];
@@ -446,7 +447,7 @@ impl TuiApp {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
                 Span::styled(format!("  {}", cat[0]), orange),
-                Span::styled("  🐱 microvibe", orange.add_modifier(Modifier::BOLD)),
+                Span::styled("  microvibe", orange.add_modifier(Modifier::BOLD)),
                 Span::styled(format!("  v{} · ", env!("CARGO_PKG_VERSION")), dim),
                 Span::styled(&self.model, Style::default().fg(Color::Yellow)),
             ]));
