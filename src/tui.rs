@@ -446,7 +446,7 @@ impl TuiApp {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
                 Span::styled(format!("  {}", cat[0]), orange),
-                Span::styled("  microvibe", orange.add_modifier(Modifier::BOLD)),
+                Span::styled("  🐱 microvibe", orange.add_modifier(Modifier::BOLD)),
                 Span::styled(format!("  v{} · ", env!("CARGO_PKG_VERSION")), dim),
                 Span::styled(&self.model, Style::default().fg(Color::Yellow)),
             ]));
