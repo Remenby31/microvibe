@@ -85,6 +85,7 @@ pub struct TuiApp {
     pub waiting: bool,
     pub approval_pending: bool,
     pub auto_approve: bool,
+    pub agent_mode: usize, // 0=default, 1=plan, 2=accept-edits, 3=auto-approve
     input_history: Vec<String>,
     input_history_idx: Option<usize>,
     spinner_tick: usize,
@@ -111,6 +112,7 @@ impl TuiApp {
             waiting: false,
             approval_pending: false,
             auto_approve: false,
+            agent_mode: 0,
             input_history: Vec::new(),
             input_history_idx: None,
             spinner_tick: 0,
@@ -796,10 +798,14 @@ impl TuiApp {
             Color::Yellow
         } else if self.waiting {
             Color::DarkGray
-        } else if self.auto_approve {
-            Color::Red
         } else {
-            Color::Green
+            match self.agent_mode {
+                0 => Color::Green,       // default
+                1 => Color::Green,       // plan (safe)
+                2 => Color::Yellow,      // accept-edits (warning)
+                3 => Color::Red,         // auto-approve (yolo)
+                _ => Color::Green,
+            }
         };
 
         let title = if self.approval_pending {
@@ -823,11 +829,12 @@ impl TuiApp {
             Span::styled(input_content, input_style),
         ]);
 
-        // Right-side label (like Vibe's "auto approve" / safe mode)
-        let (right_label, right_color) = if self.auto_approve {
-            (" auto approve ", Color::Red)
-        } else {
-            ("", Color::Green)
+        // Right-side label (like Vibe's agent mode labels)
+        let (right_label, right_color) = match self.agent_mode {
+            1 => (" plan ", Color::Green),
+            2 => (" accept edits ", Color::Yellow),
+            3 => (" auto approve ", Color::Red),
+            _ => ("", Color::Green), // default: no label
         };
 
         // CWD for bottom-right (like Vibe's "agentree" / path)
@@ -902,9 +909,10 @@ impl TuiApp {
             (KeyModifiers::CONTROL, KeyCode::Char('y')) => {
                 return KeyAction::CopyLast;
             }
-            // Shift+Tab: cycle permission mode (like Vibe)
-            (KeyModifiers::SHIFT, KeyCode::BackTab) if !self.waiting => {
-                self.auto_approve = !self.auto_approve;
+            // Shift+Tab: cycle agent mode (like Vibe)
+            (KeyModifiers::SHIFT | KeyModifiers::NONE, KeyCode::BackTab) if !self.waiting => {
+                self.agent_mode = (self.agent_mode + 1) % 4;
+                self.auto_approve = self.agent_mode == 3;
                 return KeyAction::None;
             }
             // Tab: accept completion or toggle collapse
