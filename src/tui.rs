@@ -611,9 +611,6 @@ impl TuiApp {
             .borders(Borders::ALL)
             .border_style(style(border_color))
             .title_bottom(Line::from(Span::styled(
-                format!(" {} ", cwd.trim()), style(ANSI_BRIGHT_BLACK),
-            )))
-            .title_bottom(Line::from(Span::styled(
                 format!(" {} ", mode_name), style(border_color),
             )).right_aligned());
 
@@ -981,7 +978,10 @@ fn render_md_line(text: &str) -> Line<'static> {
     if owned.starts_with('|') && owned.ends_with('|') {
         let is_separator = owned.chars().all(|c| c == '|' || c == '-' || c == ':' || c == ' ');
         if is_separator {
-            return Line::from(Span::styled(format!("  {}", owned), style(ANSI_BRIGHT_BLACK)));
+            // Render as thin horizontal rule between header and body
+            let col_count = owned.matches('|').count().saturating_sub(1);
+            let sep = (0..col_count).map(|_| "──────────").collect::<Vec<_>>().join("┼");
+            return Line::from(Span::styled(format!("  {}", sep), style(ANSI_BRIGHT_BLACK)));
         }
         let cells: Vec<&str> = owned.split('|').filter(|s| !s.is_empty()).collect();
         let mut spans = vec![Span::raw("  ")];
