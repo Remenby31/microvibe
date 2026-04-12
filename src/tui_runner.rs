@@ -86,6 +86,13 @@ pub async fn run_tui(
                     app.stats = agent_lock.stats.clone();
                     drop(agent_lock);
                     let _ = session.save();
+                    // Desktop notification (macOS)
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = std::process::Command::new("osascript")
+                            .args(["-e", "display notification \"Turn complete\" with title \"microvibe\""])
+                            .spawn();
+                    }
                 }
                 TuiEvent::Error(e) => {
                     app.add_entry(ChatEntry::Error(e));
@@ -120,6 +127,72 @@ pub async fn run_tui(
                         if input == "/quit" || input == "/q" || input == "/exit" {
                             break;
                         }
+                        // External editor: Ctrl+G
+                        if input == "/editor" {
+                            // Temporarily leave TUI for external editor
+                            terminal::disable_raw_mode()?;
+                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+                            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
+                            let tmp = std::env::temp_dir().join("microvibe_input.md");
+                            let _ = std::fs::write(&tmp, "");
+                            let status = std::process::Command::new(&editor)
+                                .arg(&tmp)
+                                .status();
+
+                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                            terminal::enable_raw_mode()?;
+
+                            if let Ok(s) = status {
+                                if s.success() {
+                                    if let Ok(content) = std::fs::read_to_string(&tmp) {
+                                        let trimmed = content.trim().to_string();
+                                        if !trimmed.is_empty() {
+                                            // Submit the editor content as input
+                                            app.add_entry(ChatEntry::User(trimmed.clone()));
+                                            app.start_assistant_entry();
+                                            app.waiting = true;
+
+                                            let agent_clone = agent.clone();
+                                            let expanded = expand_file_mentions(&trimmed);
+                                            let es = event_sender.clone();
+
+                                            agent_handle = Some(tokio::spawn(async move {
+                                                let mut agent_lock = agent_clone.lock().await;
+                                                if let Err(e) = agent_lock.run_turn(&expanded).await {
+                                                    es.send(TuiEvent::Error(e.to_string()));
+                                                }
+                                                es.send(TuiEvent::TurnDone);
+                                            }));
+                                        }
+                                    }
+                                }
+                            }
+                            let _ = std::fs::remove_file(&tmp);
+                            continue;
+                        }
+                        // Model picker modal
+                        if input == "/models" {
+                            let models = vec![
+                                "claude-opus-4-6".to_string(),
+                                "claude-sonnet-4-6".to_string(),
+                                "claude-haiku-4-5".to_string(),
+                                "codestral-latest".to_string(),
+                                "mistral-large-latest".to_string(),
+                            ];
+                            app.modal = crate::tui::Modal::ModelPicker { items: models, selected: 0 };
+                            continue;
+                        }
+                        // Session picker modal
+                        if input == "/sessions" {
+                            let sessions = crate::session::Session::list_sessions();
+                            if sessions.is_empty() {
+                                app.add_entry(ChatEntry::System("No sessions.".into()));
+                            } else {
+                                app.modal = crate::tui::Modal::SessionPicker { items: sessions, selected: 0 };
+                            }
+                            continue;
+                        }
                         if input == "/clear" {
                             let mut new_client = LlmClient::new(api_base, api_key, model, temperature, backend);
                             new_client.set_event_sender(event_sender.clone());
@@ -133,10 +206,13 @@ pub async fn run_tui(
                         }
                         if input == "/help" {
                             app.add_entry(ChatEntry::System(
-                                "Commands: /quit /clear /stats /undo /compact /diff /commit /test /review /help".into(),
+                                "Commands: /quit /clear /stats /undo /compact /diff /commit /test /review /model /cost /memory /export /branch".into(),
                             ));
                             app.add_entry(ChatEntry::System(
-                                "Keys: Ctrl+C cancel • Tab collapse/expand • Shift+Enter newline • PageUp/Down scroll".into(),
+                                "Modals: /models (model picker) • /sessions (session picker)".into(),
+                            ));
+                            app.add_entry(ChatEntry::System(
+                                "Keys: Ctrl+C cancel • Tab complete/collapse • Shift+Enter newline • Ctrl+G editor • Esc clear • PageUp/Down scroll".into(),
                             ));
                             continue;
                         }

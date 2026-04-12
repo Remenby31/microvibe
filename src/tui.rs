@@ -39,6 +39,38 @@ pub enum KeyAction {
     None,
 }
 
+/// Slash command definition for auto-complete
+struct SlashCmd {
+    name: &'static str,
+    desc: &'static str,
+}
+
+const SLASH_COMMANDS: &[SlashCmd] = &[
+    SlashCmd { name: "/quit", desc: "Exit microvibe" },
+    SlashCmd { name: "/clear", desc: "Clear conversation context" },
+    SlashCmd { name: "/stats", desc: "Show token usage and cost" },
+    SlashCmd { name: "/undo", desc: "Undo last turn" },
+    SlashCmd { name: "/compact", desc: "Force context compaction" },
+    SlashCmd { name: "/diff", desc: "Show git diff" },
+    SlashCmd { name: "/commit", desc: "Auto-commit with LLM message" },
+    SlashCmd { name: "/test", desc: "Run project tests" },
+    SlashCmd { name: "/review", desc: "Review current changes" },
+    SlashCmd { name: "/branch", desc: "Create git branch" },
+    SlashCmd { name: "/export", desc: "Export conversation as markdown" },
+    SlashCmd { name: "/model", desc: "Show or switch model" },
+    SlashCmd { name: "/cost", desc: "Detailed cost breakdown" },
+    SlashCmd { name: "/memory", desc: "Show persistent memory" },
+    SlashCmd { name: "/help", desc: "Show available commands" },
+];
+
+/// Modal overlay type
+#[derive(Clone, PartialEq)]
+pub enum Modal {
+    None,
+    ModelPicker { items: Vec<String>, selected: usize },
+    SessionPicker { items: Vec<(String, String, String)>, selected: usize },
+}
+
 pub struct TuiApp {
     entries: Vec<ChatEntry>,
     input: String,
@@ -53,6 +85,13 @@ pub struct TuiApp {
     input_history_idx: Option<usize>,
     spinner_tick: usize,
     max_context_tokens: usize,
+    // Auto-complete
+    completions: Vec<(String, String)>, // (name, desc)
+    completion_idx: Option<usize>,
+    // Modal
+    pub modal: Modal,
+    // Banner
+    show_banner: bool,
 }
 
 impl TuiApp {
@@ -71,6 +110,10 @@ impl TuiApp {
             input_history_idx: None,
             spinner_tick: 0,
             max_context_tokens: max_ctx,
+            completions: Vec::new(),
+            completion_idx: None,
+            modal: Modal::None,
+            show_banner: true,
         }
     }
 
@@ -129,18 +172,144 @@ impl TuiApp {
         self.spinner_tick = self.spinner_tick.wrapping_add(1);
         let size = f.area();
 
+        // Compute completion popup height
+        let popup_height = if !self.completions.is_empty() {
+            (self.completions.len() as u16 + 2).min(10)
+        } else {
+            0
+        };
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Min(3),
                 Constraint::Length(1),
+                Constraint::Length(popup_height), // completion popup
                 Constraint::Length(3),
             ])
             .split(size);
 
         self.render_chat(f, chunks[0]);
         self.render_status(f, chunks[1]);
-        self.render_input(f, chunks[2]);
+        if popup_height > 0 {
+            self.render_completions(f, chunks[2]);
+        }
+        self.render_input(f, chunks[3]);
+
+        // Modal overlay
+        if self.modal != Modal::None {
+            self.render_modal(f, size);
+        }
+    }
+
+    fn render_completions(&self, f: &mut ratatui::Frame, area: Rect) {
+        let mut lines: Vec<Line> = Vec::new();
+        for (i, (name, desc)) in self.completions.iter().enumerate() {
+            let is_selected = self.completion_idx == Some(i);
+            let style = if is_selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {} ", name), style.add_modifier(Modifier::BOLD)),
+                Span::styled(desc.to_string(), if is_selected { style } else { Style::default().fg(Color::DarkGray) }),
+            ]));
+        }
+        let popup = Paragraph::new(Text::from(lines))
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)))
+            .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+        f.render_widget(popup, area);
+    }
+
+    fn render_modal(&self, f: &mut ratatui::Frame, area: Rect) {
+        // Center the modal
+        let modal_w = 50.min(area.width.saturating_sub(4));
+        let modal_h = 15.min(area.height.saturating_sub(4));
+        let x = (area.width.saturating_sub(modal_w)) / 2;
+        let y = (area.height.saturating_sub(modal_h)) / 2;
+        let modal_area = Rect::new(x, y, modal_w, modal_h);
+
+        match &self.modal {
+            Modal::ModelPicker { items, selected } => {
+                let mut lines: Vec<Line> = Vec::new();
+                for (i, item) in items.iter().enumerate() {
+                    let marker = if i == *selected { "▸ " } else { "  " };
+                    let style = if i == *selected {
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    lines.push(Line::from(Span::styled(format!("{}{}", marker, item), style)));
+                }
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(Span::styled(" Select Model ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+                let p = Paragraph::new(Text::from(lines))
+                    .block(block)
+                    .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+                // Clear area behind modal
+                f.render_widget(ratatui::widgets::Clear, modal_area);
+                f.render_widget(p, modal_area);
+            }
+            Modal::SessionPicker { items, selected } => {
+                let mut lines: Vec<Line> = Vec::new();
+                for (i, (id, time, summary)) in items.iter().enumerate() {
+                    let marker = if i == *selected { "▸ " } else { "  " };
+                    let style = if i == *selected {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{}{} ", marker, &id[..8.min(id.len())]), style.add_modifier(Modifier::BOLD)),
+                        Span::styled(time.to_string(), Style::default().fg(Color::DarkGray)),
+                    ]));
+                    lines.push(Line::from(Span::styled(format!("    {}", summary), Style::default().fg(Color::DarkGray))));
+                }
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(Span::styled(" Sessions ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+                let p = Paragraph::new(Text::from(lines))
+                    .block(block)
+                    .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+                f.render_widget(ratatui::widgets::Clear, modal_area);
+                f.render_widget(p, modal_area);
+            }
+            Modal::None => {}
+        }
+    }
+
+    /// Update auto-complete suggestions based on current input
+    fn update_completions(&mut self) {
+        if self.input.starts_with('/') && !self.input.contains(' ') {
+            let prefix = &self.input;
+            self.completions = SLASH_COMMANDS
+                .iter()
+                .filter(|c| c.name.starts_with(prefix))
+                .map(|c| (c.name.to_string(), c.desc.to_string()))
+                .collect();
+            if self.completions.len() == 1 && self.completions[0].0 == self.input {
+                self.completions.clear(); // exact match, hide popup
+            }
+            self.completion_idx = if self.completions.is_empty() { None } else { Some(0) };
+        } else {
+            self.completions.clear();
+            self.completion_idx = None;
+        }
+    }
+
+    fn accept_completion(&mut self) {
+        if let Some(idx) = self.completion_idx {
+            if idx < self.completions.len() {
+                self.input = self.completions[idx].0.clone();
+                self.cursor_pos = self.input.len();
+                self.completions.clear();
+                self.completion_idx = None;
+            }
+        }
     }
 
     fn render_chat(&mut self, f: &mut ratatui::Frame, area: Rect) {
@@ -455,6 +624,11 @@ impl TuiApp {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> KeyAction {
+        // Modal mode
+        if self.modal != Modal::None {
+            return self.handle_modal_key(key);
+        }
+
         // Approval mode
         if self.approval_pending {
             return match key.code {
@@ -467,7 +641,6 @@ impl TuiApp {
         }
 
         match (key.modifiers, key.code) {
-            // Ctrl+C: cancel if waiting, quit otherwise
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                 if self.waiting {
                     KeyAction::Cancel
@@ -475,9 +648,17 @@ impl TuiApp {
                     KeyAction::Quit
                 }
             }
-            // Tab: toggle collapse on last collapsible entry
+            // Ctrl+G: external editor
+            (KeyModifiers::CONTROL, KeyCode::Char('g')) if !self.waiting => {
+                return KeyAction::Submit("/editor".to_string());
+            }
+            // Tab: accept completion or toggle collapse
             (_, KeyCode::Tab) if !self.waiting => {
-                self.toggle_last_collapsible();
+                if !self.completions.is_empty() {
+                    self.accept_completion();
+                } else {
+                    self.toggle_last_collapsible();
+                }
                 KeyAction::None
             }
             (KeyModifiers::SHIFT, KeyCode::Enter) => {
@@ -494,6 +675,9 @@ impl TuiApp {
                 self.input_history_idx = None;
                 self.input.clear();
                 self.cursor_pos = 0;
+                self.completions.clear();
+                self.completion_idx = None;
+                self.show_banner = false;
                 KeyAction::Submit(submitted)
             }
             (_, KeyCode::Backspace) => {
@@ -548,13 +732,74 @@ impl TuiApp {
             (_, KeyCode::PageUp) => { self.scroll = self.scroll.saturating_sub(10); KeyAction::None }
             (_, KeyCode::PageDown) => { self.scroll = self.scroll.saturating_add(10); KeyAction::None }
             (_, KeyCode::Esc) => {
-                self.input.clear();
-                self.cursor_pos = 0;
+                if !self.completions.is_empty() {
+                    self.completions.clear();
+                    self.completion_idx = None;
+                } else {
+                    self.input.clear();
+                    self.cursor_pos = 0;
+                }
                 KeyAction::None
             }
             (_, KeyCode::Char(c)) => {
                 self.input.insert(self.cursor_pos, c);
                 self.cursor_pos += 1;
+                self.update_completions();
+                KeyAction::None
+            }
+            _ => KeyAction::None,
+        }
+    }
+
+    fn handle_modal_key(&mut self, key: KeyEvent) -> KeyAction {
+        match key.code {
+            KeyCode::Esc => {
+                self.modal = Modal::None;
+                KeyAction::None
+            }
+            KeyCode::Up => {
+                match &mut self.modal {
+                    Modal::ModelPicker { selected, items } => {
+                        if *selected > 0 { *selected -= 1; }
+                    }
+                    Modal::SessionPicker { selected, items } => {
+                        if *selected > 0 { *selected -= 1; }
+                    }
+                    _ => {}
+                }
+                KeyAction::None
+            }
+            KeyCode::Down => {
+                match &mut self.modal {
+                    Modal::ModelPicker { selected, items } => {
+                        if *selected + 1 < items.len() { *selected += 1; }
+                    }
+                    Modal::SessionPicker { selected, items } => {
+                        if *selected + 1 < items.len() { *selected += 1; }
+                    }
+                    _ => {}
+                }
+                KeyAction::None
+            }
+            KeyCode::Enter => {
+                match &self.modal {
+                    Modal::ModelPicker { selected, items } => {
+                        if let Some(item) = items.get(*selected) {
+                            let cmd = format!("/model {}", item);
+                            self.modal = Modal::None;
+                            return KeyAction::Submit(cmd);
+                        }
+                    }
+                    Modal::SessionPicker { selected, items } => {
+                        if let Some((id, _, _)) = items.get(*selected) {
+                            let cmd = format!("/resume {}", id);
+                            self.modal = Modal::None;
+                            return KeyAction::Submit(cmd);
+                        }
+                    }
+                    _ => {}
+                }
+                self.modal = Modal::None;
                 KeyAction::None
             }
             _ => KeyAction::None,
