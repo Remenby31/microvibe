@@ -84,7 +84,7 @@ impl AgentMode {
 pub enum ChatEntry {
     User(String),
     Assistant(String),
-    ToolCall { name: String, detail: String, spinning: bool },
+    ToolCall { name: String, detail: String, spinning: bool, started_at: std::time::Instant },
     ToolResult { tool_name: String, summary: String, detail: Option<String>, collapsed: bool },
     Thinking { text: String, spinning: bool, collapsed: bool },
     System(String),
@@ -376,8 +376,13 @@ impl TuiApp {
                     }
                 }
 
-                // Tool call: pulse spinner + name + detail
-                ChatEntry::ToolCall { name, detail, spinning } => {
+                // Tool call: pulse spinner + name + detail + timer (like Vibe)
+                ChatEntry::ToolCall { name, detail, spinning, started_at } => {
+                    let elapsed = started_at.elapsed().as_secs();
+                    let timer = if *spinning && elapsed > 0 {
+                        format!(" ({}s esc to interrupt)", elapsed)
+                    } else { String::new() };
+
                     let status = if *spinning {
                         Span::styled(
                             format!("{} ", SPINNER_PULSE[self.spinner_tick / 3 % SPINNER_PULSE.len()]),
@@ -386,21 +391,19 @@ impl TuiApp {
                     } else {
                         Span::styled("✓ ", style(ANSI_GREEN))
                     };
+
+                    // Bash: show "$ command" like Vibe
+                    let display = if name == "bash" {
+                        format!("$ {}", detail.chars().take(55).collect::<String>())
+                    } else {
+                        format!("{} {} {}", tool_icon(name), name, detail.chars().take(50).collect::<String>())
+                    };
+
                     lines.push(Line::from(vec![
                         Span::raw("  "),
                         status,
-                        Span::styled(
-                            format!("{} ", tool_icon(name)),
-                            style(ANSI_DEFAULT),
-                        ),
-                        Span::styled(
-                            format!("{} ", name),
-                            style(ANSI_DEFAULT).add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            detail.chars().take(55).collect::<String>(),
-                            style(ANSI_BRIGHT_BLACK),
-                        ),
+                        Span::styled(display, style(ANSI_DEFAULT)),
+                        Span::styled(timer, style(ANSI_BRIGHT_BLACK)),
                     ]));
                 }
 
@@ -547,10 +550,11 @@ impl TuiApp {
         let status = Line::from(vec![
             Span::styled(format!(" {} ", cwd), style(ANSI_BRIGHT_BLACK)),
             Span::styled("│ ", style(ANSI_BRIGHT_BLACK)),
-            Span::styled(format!("{:.0}% of {}k ", pct, self.max_context_tokens / 1000),
-                style(if pct > 80.0 { ANSI_RED } else { ANSI_BRIGHT_BLACK })),
-            Span::styled(format!("{}tok ", total), style(ANSI_BRIGHT_BLACK)),
-            Span::styled(format!("${:.4} ", cost), style(ANSI_BRIGHT_BLACK)),
+            Span::styled(
+                format!("{:.0}% of {}k tokens ", pct, self.max_context_tokens / 1000),
+                style(if pct > 80.0 { ANSI_RED } else if pct > 50.0 { ANSI_YELLOW } else { ANSI_BRIGHT_BLACK }),
+            ),
+            Span::styled(format!("${:.2} ", cost), style(ANSI_BRIGHT_BLACK)),
             Span::styled("│ ", style(ANSI_BRIGHT_BLACK)),
             if self.waiting {
                 let frame = SPINNER_BRAILLE[self.spinner_tick / 2 % SPINNER_BRAILLE.len()];
@@ -597,10 +601,21 @@ impl TuiApp {
             })
             .unwrap_or_else(|_| " . ".into());
 
+        let mode_name = match self.agent_mode {
+            AgentMode::Default => "microvibe",
+            AgentMode::Plan => "plan",
+            AgentMode::AcceptEdits => "accept edits",
+            AgentMode::AutoApprove => "auto approve",
+        };
         let mut block = Block::default()
             .borders(Borders::ALL)
             .border_style(style(border_color))
-            .title_bottom(Line::from(Span::styled(&cwd, style(ANSI_BRIGHT_BLACK))).right_aligned());
+            .title_bottom(Line::from(Span::styled(
+                format!(" {} ", cwd.trim()), style(ANSI_BRIGHT_BLACK),
+            )))
+            .title_bottom(Line::from(Span::styled(
+                format!(" {} ", mode_name), style(border_color),
+            )).right_aligned());
 
         if !label.is_empty() {
             block = block.title_top(
@@ -960,6 +975,21 @@ fn render_md_line(text: &str) -> Line<'static> {
             spans.extend(parse_inline(&owned[dot_pos + 2..]));
             return Line::from(spans);
         }
+    }
+
+    // Table rows: | col | col |
+    if owned.starts_with('|') && owned.ends_with('|') {
+        let is_separator = owned.chars().all(|c| c == '|' || c == '-' || c == ':' || c == ' ');
+        if is_separator {
+            return Line::from(Span::styled(format!("  {}", owned), style(ANSI_BRIGHT_BLACK)));
+        }
+        let cells: Vec<&str> = owned.split('|').filter(|s| !s.is_empty()).collect();
+        let mut spans = vec![Span::raw("  ")];
+        for (i, cell) in cells.iter().enumerate() {
+            if i > 0 { spans.push(Span::styled(" │ ", style(ANSI_BRIGHT_BLACK))); }
+            spans.extend(parse_inline(cell.trim()));
+        }
+        return Line::from(spans);
     }
 
     // Horizontal rule

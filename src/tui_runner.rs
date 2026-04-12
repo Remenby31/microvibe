@@ -73,7 +73,10 @@ pub async fn run_tui(
                 TuiEvent::TextDelta(text) => app.append_assistant_text(&text),
                 TuiEvent::TextDone => {}
                 TuiEvent::ToolCallStart { name, detail } => {
-                    app.add_entry(ChatEntry::ToolCall { name, detail, spinning: true });
+                    app.add_entry(ChatEntry::ToolCall {
+                        name, detail, spinning: true,
+                        started_at: std::time::Instant::now(),
+                    });
                 }
                 TuiEvent::ToolCallDone { name, success, summary, full_result } => {
                     app.finish_last_tool(success);
@@ -335,9 +338,19 @@ pub async fn run_tui(
     drop(agent_lock);
     let _ = session.save();
 
+    // Clean terminal restore — prevents "Close Window?" dialog
     terminal::disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
+
+    // Restore stderr (was redirected to /dev/null)
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::io::AsRawFd;
+        if let Ok(tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            libc::dup2(tty.as_raw_fd(), 2);
+        }
+    }
 
     Ok(())
 }
