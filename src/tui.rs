@@ -18,7 +18,7 @@ pub enum ChatEntry {
     User(String),
     Assistant(String),
     ToolCall { name: String, detail: String, spinning: bool },
-    ToolResult { summary: String, detail: Option<String>, collapsed: bool },
+    ToolResult { tool_name: String, summary: String, detail: Option<String>, collapsed: bool },
     Thinking { text: String, spinning: bool, collapsed: bool },
     System(String),
     Error(String),
@@ -71,6 +71,7 @@ pub enum Modal {
     None,
     ModelPicker { items: Vec<String>, selected: usize },
     SessionPicker { items: Vec<(String, String, String)>, selected: usize },
+    RewindPicker { items: Vec<String>, selected: usize },
 }
 
 pub struct TuiApp {
@@ -274,6 +275,27 @@ impl TuiApp {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Cyan))
                     .title(Span::styled(" Sessions ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+                let p = Paragraph::new(Text::from(lines))
+                    .block(block)
+                    .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+                f.render_widget(ratatui::widgets::Clear, modal_area);
+                f.render_widget(p, modal_area);
+            }
+            Modal::RewindPicker { items, selected } => {
+                let mut lines: Vec<Line> = Vec::new();
+                for (i, item) in items.iter().enumerate() {
+                    let marker = if i == *selected { "▸ " } else { "  " };
+                    let style = if i == *selected {
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    lines.push(Line::from(Span::styled(format!("{}{}", marker, item), style)));
+                }
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Magenta))
+                    .title(Span::styled(" Rewind to checkpoint ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)));
                 let p = Paragraph::new(Text::from(lines))
                     .block(block)
                     .style(Style::default().bg(Color::Rgb(20, 20, 20)));
@@ -485,7 +507,7 @@ impl TuiApp {
                         status,
                     ]));
                 }
-                ChatEntry::ToolResult { summary, detail, collapsed } => {
+                ChatEntry::ToolResult { tool_name, summary, detail, collapsed } => {
                     let toggle = if detail.is_some() {
                         if *collapsed { "▶ " } else { "▼ " }
                     } else {
@@ -498,25 +520,49 @@ impl TuiApp {
                             Style::default().fg(Color::DarkGray),
                         ),
                     ]));
-                    // Show expanded detail with diff coloring
+                    // Show expanded detail
                     if !collapsed {
                         if let Some(ref det) = detail {
-                            for line in det.lines().take(20) {
+                            let is_bash = tool_name == "bash";
+                            let max_lines = if is_bash { 30 } else { 20 };
+
+                            if is_bash {
+                                // Bash: show as terminal output
+                                lines.push(Line::from(Span::styled(
+                                    "      ┌─ output ─────────────────────────────────┐",
+                                    Style::default().fg(Color::DarkGray),
+                                )));
+                            }
+
+                            for line in det.lines().take(max_lines) {
                                 let style = if line.starts_with('+') && !line.starts_with("+++") {
                                     Style::default().fg(Color::Green)
                                 } else if line.starts_with('-') && !line.starts_with("---") {
                                     Style::default().fg(Color::Red)
                                 } else if line.starts_with("@@") {
                                     Style::default().fg(Color::Cyan)
+                                } else if line.starts_with("Exit code:") || line.starts_with("STDERR:") {
+                                    Style::default().fg(Color::Red)
+                                } else if is_bash {
+                                    Style::default().fg(Color::White).bg(Color::Rgb(25, 25, 25))
                                 } else {
                                     Style::default().fg(Color::DarkGray)
                                 };
-                                lines.push(Line::from(Span::styled(format!("      {}", line), style)));
+                                let prefix = if is_bash { "      │ " } else { "      " };
+                                lines.push(Line::from(Span::styled(format!("{}{}", prefix, line), style)));
                             }
-                            let total_lines = det.lines().count();
-                            if total_lines > 20 {
+
+                            if is_bash {
                                 lines.push(Line::from(Span::styled(
-                                    format!("      … ({} more lines)", total_lines - 20),
+                                    "      └──────────────────────────────────────────┘",
+                                    Style::default().fg(Color::DarkGray),
+                                )));
+                            }
+
+                            let total_lines = det.lines().count();
+                            if total_lines > max_lines {
+                                lines.push(Line::from(Span::styled(
+                                    format!("      … ({} more lines)", total_lines - max_lines),
                                     Style::default().fg(Color::DarkGray),
                                 )));
                             }
@@ -626,6 +672,14 @@ impl TuiApp {
         let max_scroll = content_height.saturating_sub(visible_height);
         if self.scroll > max_scroll {
             self.scroll = max_scroll;
+        }
+
+        // Show "load more" hint if scrolled far from top
+        if self.scroll > 0 && content_height > visible_height * 3 {
+            lines.insert(0, Line::from(Span::styled(
+                "  ↑ Scroll up for more history",
+                Style::default().fg(Color::DarkGray),
+            )));
         }
 
         let paragraph = Paragraph::new(Text::from(lines))
@@ -873,10 +927,9 @@ impl TuiApp {
             }
             KeyCode::Up => {
                 match &mut self.modal {
-                    Modal::ModelPicker { selected, items } => {
-                        if *selected > 0 { *selected -= 1; }
-                    }
-                    Modal::SessionPicker { selected, items } => {
+                    Modal::ModelPicker { selected, .. } |
+                    Modal::SessionPicker { selected, .. } |
+                    Modal::RewindPicker { selected, .. } => {
                         if *selected > 0 { *selected -= 1; }
                     }
                     _ => {}
@@ -889,6 +942,9 @@ impl TuiApp {
                         if *selected + 1 < items.len() { *selected += 1; }
                     }
                     Modal::SessionPicker { selected, items } => {
+                        if *selected + 1 < items.len() { *selected += 1; }
+                    }
+                    Modal::RewindPicker { selected, items } => {
                         if *selected + 1 < items.len() { *selected += 1; }
                     }
                     _ => {}
@@ -910,6 +966,11 @@ impl TuiApp {
                             self.modal = Modal::None;
                             return KeyAction::Submit(cmd);
                         }
+                    }
+                    Modal::RewindPicker { selected, .. } => {
+                        let n = *selected;
+                        self.modal = Modal::None;
+                        return KeyAction::Submit(format!("/rewind {}", n));
                     }
                     _ => {}
                 }
@@ -936,11 +997,11 @@ impl TuiApp {
             match entry {
                 ChatEntry::ToolResult { collapsed, detail, .. } if detail.is_some() => {
                     *collapsed = !*collapsed;
-                    break;
+                    return;
                 }
                 ChatEntry::Thinking { collapsed, spinning, .. } if !*spinning => {
                     *collapsed = !*collapsed;
-                    break;
+                    return;
                 }
                 _ => continue,
             }

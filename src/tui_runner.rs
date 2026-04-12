@@ -61,10 +61,10 @@ pub async fn run_tui(
                 TuiEvent::ToolCallStart { name, detail } => {
                     app.add_entry(ChatEntry::ToolCall { name, detail, spinning: true });
                 }
-                TuiEvent::ToolCallDone { name: _, success, summary, full_result } => {
+                TuiEvent::ToolCallDone { name, success, summary, full_result } => {
                     app.finish_last_tool(success);
                     app.add_entry(ChatEntry::ToolResult {
-                        summary, detail: full_result, collapsed: true,
+                        tool_name: name, summary, detail: full_result, collapsed: true,
                     });
                 }
                 TuiEvent::ThinkingStart => {
@@ -110,9 +110,16 @@ pub async fn run_tui(
             }
         }
 
-        // Poll keyboard
+        // Poll keyboard and focus events
         if event::poll(Duration::from_millis(33))? {
-            if let Event::Key(key) = event::read()? {
+            let evt = event::read()?;
+            // Track focus for conditional notifications
+            match &evt {
+                Event::FocusGained => { /* app is focused, skip notifications */ }
+                Event::FocusLost => { /* app lost focus, send notifications */ }
+                _ => {}
+            }
+            if let Event::Key(key) = evt {
                 match app.handle_key(key) {
                     KeyAction::Quit => break,
                     KeyAction::Cancel => {
@@ -194,6 +201,29 @@ pub async fn run_tui(
                             } else {
                                 app.modal = crate::tui::Modal::SessionPicker { items: sessions, selected: 0 };
                             }
+                            continue;
+                        }
+                        // Rewind modal
+                        if input == "/rewind" {
+                            let agent_lock = agent.lock().await;
+                            let count = agent_lock.checkpoint_count();
+                            if count == 0 {
+                                app.add_entry(ChatEntry::System("No checkpoints.".into()));
+                            } else {
+                                let items: Vec<String> = (0..count)
+                                    .map(|i| format!("Checkpoint {} ({} back)", i + 1, count - i))
+                                    .collect();
+                                app.modal = crate::tui::Modal::RewindPicker { items, selected: 0 };
+                            }
+                            continue;
+                        }
+                        if input.starts_with("/rewind ") {
+                            let n: usize = input[8..].trim().parse().unwrap_or(0);
+                            let mut agent_lock = agent.lock().await;
+                            for _ in 0..=n {
+                                agent_lock.undo();
+                            }
+                            app.add_entry(ChatEntry::System(format!("Rewound {} checkpoints.", n + 1)));
                             continue;
                         }
                         if input == "/clear" {
