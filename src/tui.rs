@@ -121,6 +121,10 @@ impl TuiApp {
     }
 
     pub fn add_entry(&mut self, entry: ChatEntry) {
+        // Hide banner after first user message
+        if matches!(entry, ChatEntry::User(_)) {
+            self.show_banner = false;
+        }
         self.entries.push(entry);
         self.scroll_to_bottom();
     }
@@ -185,19 +189,19 @@ impl TuiApp {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(3),
-                Constraint::Length(1),
-                Constraint::Length(popup_height), // completion popup
-                Constraint::Length(3),
+                Constraint::Min(3),           // chat area
+                Constraint::Length(popup_height), // completion popup (0 if none)
+                Constraint::Length(3),         // input box
+                Constraint::Length(1),         // status bar (bottom, like Vibe)
             ])
             .split(size);
 
         self.render_chat(f, chunks[0]);
-        self.render_status(f, chunks[1]);
         if popup_height > 0 {
-            self.render_completions(f, chunks[2]);
+            self.render_completions(f, chunks[1]);
         }
-        self.render_input(f, chunks[3]);
+        self.render_input(f, chunks[2]);
+        self.render_status(f, chunks[3]);
 
         // Modal overlay
         if self.modal != Modal::None {
@@ -740,7 +744,7 @@ impl TuiApp {
         let display_text = if self.approval_pending {
             format!("{} [y]es / [n]o / [a]lways", prompt)
         } else if self.input.is_empty() && !self.waiting {
-            format!("{} Type a message... (/help for commands, Shift+Enter for newline)", prompt)
+            format!("{} ...", prompt)
         } else {
             format!("{} {}", prompt, &self.input)
         };
