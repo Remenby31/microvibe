@@ -89,8 +89,8 @@ impl Agent {
             self.stats.prompt_tokens += completion_stats.prompt_tokens;
             self.stats.completion_tokens += completion_stats.completion_tokens;
 
-            // Show token info on first response of each turn
-            if round == 0 && completion_stats.prompt_tokens > 0 {
+            // Show token info on first response of each turn (REPL mode only)
+            if round == 0 && completion_stats.prompt_tokens > 0 && !self.client.is_tui_mode() {
                 let tps = if completion_stats.duration_ms > 0 {
                     (completion_stats.completion_tokens as f64
                         / completion_stats.duration_ms as f64)
@@ -164,7 +164,7 @@ impl Agent {
                 .partition(|(tc, _)| is_readonly_tool(&tc.function.name));
 
             // Execute read-only tools in parallel
-            if readonly.len() > 1 {
+            if readonly.len() > 1 && !self.client.is_tui_mode() {
                 eprintln!(
                     "  {} {} tools in parallel",
                     "parallel:".dimmed(),
@@ -239,10 +239,12 @@ impl Agent {
             }
         }
 
-        eprintln!(
-            "{}",
-            "Warning: reached max tool call rounds".yellow().bold()
-        );
+        if !self.client.is_tui_mode() {
+            eprintln!(
+                "{}",
+                "Warning: reached max tool call rounds".yellow().bold()
+            );
+        }
         Ok(())
     }
 
