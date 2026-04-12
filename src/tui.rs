@@ -284,6 +284,7 @@ impl TuiApp {
 
     /// Update auto-complete suggestions based on current input
     fn update_completions(&mut self) {
+        // Slash command completion
         if self.input.starts_with('/') && !self.input.contains(' ') {
             let prefix = &self.input;
             self.completions = SLASH_COMMANDS
@@ -292,20 +293,76 @@ impl TuiApp {
                 .map(|c| (c.name.to_string(), c.desc.to_string()))
                 .collect();
             if self.completions.len() == 1 && self.completions[0].0 == self.input {
-                self.completions.clear(); // exact match, hide popup
+                self.completions.clear();
             }
             self.completion_idx = if self.completions.is_empty() { None } else { Some(0) };
-        } else {
-            self.completions.clear();
-            self.completion_idx = None;
+            return;
         }
+
+        // @file path completion
+        if let Some(at_pos) = self.input[..self.cursor_pos].rfind('@') {
+            let partial = &self.input[at_pos + 1..self.cursor_pos];
+            if !partial.contains(' ') && at_pos == 0 || self.input.as_bytes().get(at_pos.wrapping_sub(1)) == Some(&b' ') {
+                let dir = if partial.contains('/') {
+                    let last_slash = partial.rfind('/').unwrap();
+                    &partial[..last_slash + 1]
+                } else {
+                    ""
+                };
+
+                let prefix = if partial.contains('/') {
+                    &partial[partial.rfind('/').unwrap() + 1..]
+                } else {
+                    partial
+                };
+
+                let search_dir = if dir.is_empty() { ".".to_string() } else { dir.to_string() };
+                if let Ok(entries) = std::fs::read_dir(&search_dir) {
+                    self.completions = entries
+                        .flatten()
+                        .filter_map(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            if name.starts_with('.') { return None; }
+                            if !name.to_lowercase().starts_with(&prefix.to_lowercase()) { return None; }
+                            let is_dir = e.metadata().map(|m| m.is_dir()).unwrap_or(false);
+                            let display = format!("@{}{}{}", dir, name, if is_dir { "/" } else { "" });
+                            let desc = if is_dir { "directory".to_string() } else {
+                                let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+                                if size < 1024 { format!("{}B", size) }
+                                else if size < 1024 * 1024 { format!("{:.1}KB", size as f64 / 1024.0) }
+                                else { format!("{:.1}MB", size as f64 / 1048576.0) }
+                            };
+                            Some((display, desc))
+                        })
+                        .take(10)
+                        .collect();
+                    self.completion_idx = if self.completions.is_empty() { None } else { Some(0) };
+                    return;
+                }
+            }
+        }
+
+        self.completions.clear();
+        self.completion_idx = None;
     }
 
     fn accept_completion(&mut self) {
         if let Some(idx) = self.completion_idx {
             if idx < self.completions.len() {
-                self.input = self.completions[idx].0.clone();
-                self.cursor_pos = self.input.len();
+                let completion = &self.completions[idx].0;
+                if completion.starts_with('@') {
+                    // Replace from the last @ to cursor
+                    if let Some(at_pos) = self.input[..self.cursor_pos].rfind('@') {
+                        let suffix = self.input[self.cursor_pos..].to_string();
+                        self.input = format!("{}{}{}", &self.input[..at_pos], completion, if completion.ends_with('/') { "" } else { " " });
+                        let new_cursor = self.input.len();
+                        self.input.push_str(&suffix);
+                        self.cursor_pos = new_cursor;
+                    }
+                } else {
+                    self.input = completion.clone();
+                    self.cursor_pos = self.input.len();
+                }
                 self.completions.clear();
                 self.completion_idx = None;
             }
@@ -316,6 +373,23 @@ impl TuiApp {
         let mut lines: Vec<Line> = Vec::new();
         let mut in_code_block = false;
         let mut prev_was_tool = false;
+
+        // Banner
+        if self.show_banner {
+            let banner_lines = [
+                "",
+                "  ┌─────────────────────────────────────────────┐",
+                "  │  _ __ ___ (_) ___ _ __ _____   _(_) |__   __|",
+                "  │ | '_ ` _ \\| |/ __| '__/ _ \\ \\ / / | '_ \\ / _ \\│",
+                "  │ | | | | | | | (__| | | (_) \\ V /| | |_) |  __/│",
+                "  │ |_| |_| |_|_|\\___|_|  \\___/ \\_/ |_|_.__/ \\___|│",
+                "  └─────────────────────────────────────────────┘",
+                "",
+            ];
+            for bl in &banner_lines {
+                lines.push(Line::from(Span::styled(bl.to_string(), Style::default().fg(Color::Cyan))));
+            }
+        }
 
         for entry in &self.entries {
             let is_tool = matches!(entry, ChatEntry::ToolCall { .. } | ChatEntry::ToolResult { .. });
@@ -422,14 +496,20 @@ impl TuiApp {
                             Style::default().fg(Color::DarkGray),
                         ),
                     ]));
-                    // Show expanded detail
+                    // Show expanded detail with diff coloring
                     if !collapsed {
                         if let Some(ref det) = detail {
                             for line in det.lines().take(20) {
-                                lines.push(Line::from(vec![
-                                    Span::styled("    ", Style::default()),
-                                    Span::styled(format!("  {}", line), Style::default().fg(Color::DarkGray)),
-                                ]));
+                                let style = if line.starts_with('+') && !line.starts_with("+++") {
+                                    Style::default().fg(Color::Green)
+                                } else if line.starts_with('-') && !line.starts_with("---") {
+                                    Style::default().fg(Color::Red)
+                                } else if line.starts_with("@@") {
+                                    Style::default().fg(Color::Cyan)
+                                } else {
+                                    Style::default().fg(Color::DarkGray)
+                                };
+                                lines.push(Line::from(Span::styled(format!("      {}", line), style)));
                             }
                             let total_lines = det.lines().count();
                             if total_lines > 20 {
@@ -684,6 +764,7 @@ impl TuiApp {
                 if self.cursor_pos > 0 {
                     self.cursor_pos -= 1;
                     self.input.remove(self.cursor_pos);
+                    self.update_completions();
                 }
                 KeyAction::None
             }

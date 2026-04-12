@@ -18,6 +18,7 @@ pub enum TuiEvent {
         name: String,
         success: bool,
         summary: String,
+        full_result: Option<String>,
     },
     /// Thinking/reasoning started
     ThinkingStart,

@@ -61,10 +61,10 @@ pub async fn run_tui(
                 TuiEvent::ToolCallStart { name, detail } => {
                     app.add_entry(ChatEntry::ToolCall { name, detail, spinning: true });
                 }
-                TuiEvent::ToolCallDone { name: _, success, summary } => {
+                TuiEvent::ToolCallDone { name: _, success, summary, full_result } => {
                     app.finish_last_tool(success);
                     app.add_entry(ChatEntry::ToolResult {
-                        summary, detail: None, collapsed: true,
+                        summary, detail: full_result, collapsed: true,
                     });
                 }
                 TuiEvent::ThinkingStart => {

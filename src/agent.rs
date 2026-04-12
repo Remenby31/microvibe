@@ -219,11 +219,13 @@ impl Agent {
                 self.stats.tool_calls += 1;
 
                 let summary: String = result.lines().next().unwrap_or("").chars().take(80).collect();
+                let full = if result.lines().count() > 1 { Some(result.clone()) } else { None };
                 if self.client.is_tui_mode() {
                     self.client.emit(TuiEvent::ToolCallDone {
                         name: name.to_string(),
                         success: true,
                         summary,
+                        full_result: full,
                     });
                 } else {
                     print_tool_result(&result);
