@@ -204,7 +204,7 @@ impl TuiApp {
                 .constraints([
                     Constraint::Min(3),
                     Constraint::Length(popup_height),
-                    Constraint::Length(3),
+                    Constraint::Length(4),
                     Constraint::Length(1),
                 ])
                 .split(size);
@@ -217,7 +217,7 @@ impl TuiApp {
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(3),
-                    Constraint::Length(3),
+                    Constraint::Length(4),
                     Constraint::Length(1),
                 ])
                 .split(size);
@@ -425,21 +425,27 @@ impl TuiApp {
         let mut in_code_block = false;
         let mut prev_was_tool = false;
 
-        // Banner
+        // Kitten banner
         if self.show_banner {
-            let banner_lines = [
-                "",
-                "  ┌─────────────────────────────────────────────┐",
-                "  │  _ __ ___ (_) ___ _ __ _____   _(_) |__   __|",
-                "  │ | '_ ` _ \\| |/ __| '__/ _ \\ \\ / / | '_ \\ / _ \\│",
-                "  │ | | | | | | | (__| | | (_) \\ V /| | |_) |  __/│",
-                "  │ |_| |_| |_|_|\\___|_|  \\___/ \\_/ |_|_.__/ \\___|│",
-                "  └─────────────────────────────────────────────┘",
-                "",
+            let kitten = [
+                "   /\\_/\\  ",
+                "  ( o.o ) ",
+                "   > ^ <  ",
+                "  /|   |\\  ",
+                " (_|   |_) ",
             ];
-            for bl in &banner_lines {
-                lines.push(Line::from(Span::styled(bl.to_string(), Style::default().fg(Color::Cyan))));
+            lines.push(Line::from(""));
+            for kl in &kitten {
+                lines.push(Line::from(Span::styled(
+                    format!("                {}", kl),
+                    Style::default().fg(Color::Rgb(255, 130, 5)), // Mistral orange
+                )));
             }
+            lines.push(Line::from(Span::styled(
+                "                microvibe",
+                Style::default().fg(Color::Rgb(255, 130, 5)).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
         }
 
         for entry in &self.entries {

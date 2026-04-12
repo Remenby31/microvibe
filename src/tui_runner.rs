@@ -25,6 +25,17 @@ pub async fn run_tui(
     max_context_tokens: usize,
     system_prompt: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    crate::events::set_tui_mode(true);
+
+    // Redirect stderr to /dev/null — prevents ALL eprintln! from corrupting the TUI
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::io::AsRawFd;
+        if let Ok(devnull) = std::fs::OpenOptions::new().write(true).open("/dev/null") {
+            libc::dup2(devnull.as_raw_fd(), 2);
+        }
+    }
+
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
