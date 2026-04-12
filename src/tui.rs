@@ -425,26 +425,36 @@ impl TuiApp {
         let mut in_code_block = false;
         let mut prev_was_tool = false;
 
-        // Kitten banner
+        // Banner: kitten (braille) + info, like Vibe's layout
         if self.show_banner {
-            let kitten = [
-                "   /\\_/\\  ",
-                "  ( o.o ) ",
-                "   > ^ <  ",
-                "  /|   |\\  ",
-                " (_|   |_) ",
+            let cat = [
+                "  ⡠⣒⠄  ⡔⢄⠔⡄",
+                " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣",
+                "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆",
             ];
+            let orange = Style::default().fg(Color::Rgb(255, 130, 5));
+            let dim = Style::default().fg(Color::DarkGray);
+
             lines.push(Line::from(""));
-            for kl in &kitten {
-                lines.push(Line::from(Span::styled(
-                    format!("                {}", kl),
-                    Style::default().fg(Color::Rgb(255, 130, 5)), // Mistral orange
-                )));
-            }
-            lines.push(Line::from(Span::styled(
-                "                microvibe",
-                Style::default().fg(Color::Rgb(255, 130, 5)).add_modifier(Modifier::BOLD),
-            )));
+            // Line 1: cat + brand
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {}", cat[0]), orange),
+                Span::styled("  microvibe", orange.add_modifier(Modifier::BOLD)),
+                Span::styled(format!("  v{} · ", env!("CARGO_PKG_VERSION")), dim),
+                Span::styled(&self.model, Style::default().fg(Color::Yellow)),
+            ]));
+            // Line 2: cat + meta
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {}", cat[1]), orange),
+                Span::styled(format!("  {} · 4 providers", self.provider), dim),
+            ]));
+            // Line 3: cat + help hint
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {}", cat[2]), orange),
+                Span::styled("  Type ", dim),
+                Span::styled("/help", Style::default().fg(Color::Green)),
+                Span::styled(" for more information", dim),
+            ]));
             lines.push(Line::from(""));
         }
 
