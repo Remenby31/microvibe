@@ -10,7 +10,14 @@ mod render;
 mod session;
 mod task;
 mod tools;
+mod tui;
+mod tui_runner;
 mod types;
+
+// Re-export for tui_runner
+pub mod main_helpers {
+    pub use super::expand_file_mentions;
+}
 
 use agent::Agent;
 use clap::Parser;
@@ -58,6 +65,10 @@ struct Cli {
     /// Continue the most recent session
     #[arg(short = 'c', long = "continue")]
     continue_session: bool,
+
+    /// Use full TUI mode (ratatui)
+    #[arg(long)]
+    tui: bool,
 
     /// Initialize default config file
     #[arg(long)]
@@ -344,6 +355,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         current_session.stats = agent.stats.clone();
         let _ = current_session.save();
         return Ok(());
+    }
+
+    // TUI mode
+    if cli.tui {
+        return tui_runner::run_tui(
+            &api_base, &api_key, &model, &provider_name,
+            config.default.temperature, backend, auto_approve,
+            config.default.max_context_tokens, &system_prompt,
+        ).await;
     }
 
     // Interactive REPL
@@ -742,7 +762,7 @@ fn print_banner(model: &str, provider: &str) {
 /// Expand @file mentions in user input.
 /// `@src/main.rs` becomes the file contents inline.
 /// `@src/main.rs:10-20` reads lines 10-20 only.
-fn expand_file_mentions(input: &str) -> String {
+pub fn expand_file_mentions(input: &str) -> String {
     let mut result = input.to_string();
     let mut expansions: Vec<(String, String)> = Vec::new();
 
