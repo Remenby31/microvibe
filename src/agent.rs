@@ -75,7 +75,10 @@ impl Agent {
             if let Some(compacted) =
                 compact_messages(&self.client, &self.messages, self.max_context_tokens).await?
             {
+                let old_est: usize = self.messages.iter().map(|m| m.estimated_tokens()).sum();
                 self.messages = compacted;
+                let new_est: usize = self.messages.iter().map(|m| m.estimated_tokens()).sum();
+                self.client.emit(TuiEvent::CompactDone { old_tokens: old_est, new_tokens: new_est });
             }
 
             let turn_start = Instant::now();

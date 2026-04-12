@@ -103,6 +103,9 @@ pub async fn run_tui(
                     app.approval_pending = true;
                     app.add_entry(ChatEntry::Approval { tool_name, command });
                 }
+                TuiEvent::CompactDone { old_tokens, new_tokens } => {
+                    app.add_entry(ChatEntry::Compact { old_tokens, new_tokens });
+                }
                 TuiEvent::StatsUpdate(stats) => app.stats = stats,
             }
         }
@@ -253,6 +256,27 @@ pub async fn run_tui(
                             }
                             es.send(TuiEvent::TurnDone);
                         }));
+                    }
+                    KeyAction::CopyLast => {
+                        if let Some(text) = app.get_last_assistant_text() {
+                            #[cfg(target_os = "macos")]
+                            {
+                                let mut child = std::process::Command::new("pbcopy")
+                                    .stdin(std::process::Stdio::piped())
+                                    .spawn()
+                                    .ok();
+                                if let Some(ref mut c) = child {
+                                    use std::io::Write;
+                                    if let Some(ref mut stdin) = c.stdin {
+                                        let _ = stdin.write_all(text.as_bytes());
+                                    }
+                                    let _ = c.wait();
+                                }
+                            }
+                            app.add_entry(ChatEntry::System("Copied to clipboard.".into()));
+                        } else {
+                            app.add_entry(ChatEntry::System("Nothing to copy.".into()));
+                        }
                     }
                     KeyAction::ToggleCollapse | KeyAction::None => {}
                 }

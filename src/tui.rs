@@ -25,17 +25,19 @@ pub enum ChatEntry {
     Warning(String),
     Interrupt,
     Approval { tool_name: String, command: String },
+    Compact { old_tokens: usize, new_tokens: usize },
 }
 
 /// What the TUI returns from handle_key
 pub enum KeyAction {
     Submit(String),
     Quit,
-    Cancel,            // Ctrl+C during waiting
+    Cancel,
     ApprovalYes,
     ApprovalNo,
     ApprovalAlways,
-    ToggleCollapse,    // toggle last collapsible entry
+    ToggleCollapse,
+    CopyLast,          // Ctrl+Y copies last assistant message
     None,
 }
 
@@ -578,15 +580,42 @@ impl TuiApp {
                             format!("{}: ", tool_name),
                             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(
-                            command.chars().take(50).collect::<String>(),
-                            Style::default().fg(Color::White),
-                        ),
                     ]));
+                    // Tool-specific preview
+                    if tool_name == "bash" {
+                        lines.push(Line::from(Span::styled(
+                            format!("  ┌─── bash ──────────────────────────────────────┐"),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                        for cmd_line in command.lines().take(5) {
+                            lines.push(Line::from(vec![
+                                Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
+                                Span::styled(cmd_line.to_string(), Style::default().fg(Color::White).bg(Color::Rgb(30, 30, 30))),
+                            ]));
+                        }
+                        lines.push(Line::from(Span::styled(
+                            "  └──────────────────────────────────────────────┘",
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    } else {
+                        lines.push(Line::from(Span::styled(
+                            format!("    {}", command.chars().take(70).collect::<String>()),
+                            Style::default().fg(Color::White),
+                        )));
+                    }
                     lines.push(Line::from(Span::styled(
                         "    [y] yes  [n] no  [a] always",
                         Style::default().fg(Color::DarkGray),
                     )));
+                }
+                ChatEntry::Compact { old_tokens, new_tokens } => {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ◆ ", Style::default().fg(Color::Magenta)),
+                        Span::styled(
+                            format!("Context compacted: {} → {} tokens", old_tokens, new_tokens),
+                            Style::default().fg(Color::Magenta),
+                        ),
+                    ]));
                 }
             }
         }
@@ -731,6 +760,10 @@ impl TuiApp {
             // Ctrl+G: external editor
             (KeyModifiers::CONTROL, KeyCode::Char('g')) if !self.waiting => {
                 return KeyAction::Submit("/editor".to_string());
+            }
+            // Ctrl+Y: copy last assistant message to clipboard
+            (KeyModifiers::CONTROL, KeyCode::Char('y')) => {
+                return KeyAction::CopyLast;
             }
             // Tab: accept completion or toggle collapse
             (_, KeyCode::Tab) if !self.waiting => {
@@ -885,6 +918,17 @@ impl TuiApp {
             }
             _ => KeyAction::None,
         }
+    }
+
+    pub fn get_last_assistant_text(&self) -> Option<String> {
+        for entry in self.entries.iter().rev() {
+            if let ChatEntry::Assistant(text) = entry {
+                if !text.is_empty() {
+                    return Some(text.clone());
+                }
+            }
+        }
+        None
     }
 
     fn toggle_last_collapsible(&mut self) {

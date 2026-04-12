@@ -43,6 +43,8 @@ pub enum TuiEvent {
         tool_name: String,
         command: String,
     },
+    /// Context was compacted
+    CompactDone { old_tokens: usize, new_tokens: usize },
     /// Stats update
     StatsUpdate(SessionStats),
 }
