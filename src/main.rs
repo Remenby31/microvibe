@@ -3,6 +3,7 @@ mod approval;
 mod compact;
 mod config;
 mod llm;
+mod pricing;
 mod session;
 mod tools;
 mod types;
@@ -268,13 +269,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Single prompt mode (with optional piped stdin)
     if let Some(prompt) = cli.prompt {
+        let expanded = expand_file_mentions(&prompt);
         let full_prompt = if let Some(ref piped) = piped_input {
-            format!("{}\n\n---\nStdin:\n```\n{}\n```", prompt, piped.trim())
+            format!("{}\n\n---\nStdin:\n```\n{}\n```", expanded, piped.trim())
         } else {
-            prompt
+            expanded
         };
         agent.run_turn(&full_prompt).await?;
-        print_stats(&agent);
+        print_stats(&agent, &model);
         current_session.messages = agent.messages().to_vec();
         current_session.stats = agent.stats.clone();
         let _ = current_session.save();
@@ -284,7 +286,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Pipe-only mode (stdin without -p): use piped content as the prompt
     if let Some(piped) = piped_input {
         agent.run_turn(&piped).await?;
-        print_stats(&agent);
+        print_stats(&agent, &model);
         current_session.messages = agent.messages().to_vec();
         current_session.stats = agent.stats.clone();
         let _ = current_session.save();
@@ -311,7 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     current_session.messages = agent.messages().to_vec();
                     current_session.stats = agent.stats.clone();
                     let _ = current_session.save();
-                    print_stats(&agent);
+                    print_stats(&agent, &model);
                     return Ok(());
                 }
                 break;
@@ -353,7 +355,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 true
             }
             "/stats" => {
-                print_stats(&agent);
+                print_stats(&agent, &model);
                 true
             }
             "/save" => {
@@ -426,6 +428,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 export_conversation(&agent, cmd_args);
                 true
             }
+            "/test" => {
+                run_tests(cmd_args).await;
+                true
+            }
             "/help" => {
                 print_help();
                 true
@@ -441,7 +447,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        if let Err(e) = agent.run_turn(input).await {
+        // Expand @file mentions: @path/to/file gets replaced with file contents
+        let expanded = expand_file_mentions(input);
+
+        if let Err(e) = agent.run_turn(&expanded).await {
             eprintln!("{} {}", "Error:".red().bold(), e);
         }
 
@@ -456,7 +465,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     current_session.stats = agent.stats.clone();
     let _ = current_session.save();
 
-    print_stats(&agent);
+    print_stats(&agent, &model);
     eprintln!(
         "{} session {}",
         "Saved:".dimmed(),
@@ -465,14 +474,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn print_stats(agent: &Agent) {
+fn print_stats(agent: &Agent, model: &str) {
     let s = &agent.stats;
+    let p = pricing::get_pricing(model);
     eprintln!(
         "\n  {} {} | {} | {} tools | {} turns | ~{} ctx",
         "Session:".dimmed(),
         format!("{}in + {}out = {} tokens", s.prompt_tokens, s.completion_tokens, s.total_tokens())
             .dimmed(),
-        format!("${:.4}", s.estimated_cost(2.0, 6.0)).dimmed(), // rough Mistral pricing
+        format!("${:.4}", s.estimated_cost(p.input, p.output)).dimmed(),
         s.tool_calls,
         s.turns,
         agent.context_tokens(),
@@ -497,6 +507,160 @@ fn print_banner(model: &str, provider: &str) {
         provider.dimmed(),
         "/help for commands".dimmed()
     );
+}
+
+/// Expand @file mentions in user input.
+/// `@src/main.rs` becomes the file contents inline.
+/// `@src/main.rs:10-20` reads lines 10-20 only.
+fn expand_file_mentions(input: &str) -> String {
+    let mut result = input.to_string();
+    let mut expansions: Vec<(String, String)> = Vec::new();
+
+    for word in input.split_whitespace() {
+        if !word.starts_with('@') || word.len() < 2 {
+            continue;
+        }
+
+        let mention = &word[1..]; // strip @
+
+        // Parse optional line range: @file:10-20
+        let (path, line_range) = if let Some(colon_pos) = mention.rfind(':') {
+            let range_part = &mention[colon_pos + 1..];
+            if range_part.contains('-') || range_part.chars().all(|c| c.is_ascii_digit()) {
+                (&mention[..colon_pos], Some(range_part))
+            } else {
+                (mention, None)
+            }
+        } else {
+            (mention, None)
+        };
+
+        let p = std::path::Path::new(path);
+        if !p.exists() || !p.is_file() {
+            continue;
+        }
+
+        match std::fs::read_to_string(p) {
+            Ok(content) => {
+                let lines: Vec<&str> = content.lines().collect();
+                let selected = if let Some(range) = line_range {
+                    let parts: Vec<&str> = range.split('-').collect();
+                    let start = parts[0].parse::<usize>().unwrap_or(1).saturating_sub(1);
+                    let end = if parts.len() > 1 {
+                        parts[1].parse::<usize>().unwrap_or(lines.len())
+                    } else {
+                        start + 1
+                    };
+                    let end = end.min(lines.len());
+                    lines[start..end]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, l)| format!("{:>5}| {}", start + i + 1, l))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    // Full file, but truncate if huge
+                    let max_lines = 200;
+                    let selected_lines: Vec<String> = lines
+                        .iter()
+                        .take(max_lines)
+                        .enumerate()
+                        .map(|(i, l)| format!("{:>5}| {}", i + 1, l))
+                        .collect();
+                    let mut s = selected_lines.join("\n");
+                    if lines.len() > max_lines {
+                        s.push_str(&format!("\n... ({} more lines)", lines.len() - max_lines));
+                    }
+                    s
+                };
+
+                eprintln!(
+                    "  {} {} ({} lines)",
+                    "@file:".cyan().bold(),
+                    path,
+                    selected.lines().count()
+                );
+
+                let replacement = format!(
+                    "\n\n<file path=\"{}\">\n{}\n</file>\n",
+                    path, selected
+                );
+                expansions.push((word.to_string(), replacement));
+            }
+            Err(_) => continue,
+        }
+    }
+
+    for (mention, content) in expansions {
+        result = result.replace(&mention, &content);
+    }
+
+    result
+}
+
+/// Detect test runner and run tests
+async fn run_tests(extra_args: &str) {
+    let cwd = std::env::current_dir().unwrap_or_default();
+
+    // Detect test runner from project files
+    let (cmd, runner_name) = if cwd.join("Cargo.toml").exists() {
+        ("cargo test", "cargo")
+    } else if cwd.join("package.json").exists() {
+        if cwd.join("bun.lockb").exists() {
+            ("bun test", "bun")
+        } else if cwd.join("pnpm-lock.yaml").exists() {
+            ("pnpm test", "pnpm")
+        } else {
+            ("npm test", "npm")
+        }
+    } else if cwd.join("pyproject.toml").exists() || cwd.join("setup.py").exists() {
+        if cwd.join("pytest.ini").exists()
+            || cwd.join("pyproject.toml").exists()
+            || cwd.join("conftest.py").exists()
+        {
+            ("pytest", "pytest")
+        } else {
+            ("python -m unittest discover", "unittest")
+        }
+    } else if cwd.join("go.mod").exists() {
+        ("go test ./...", "go")
+    } else if cwd.join("Makefile").exists() {
+        ("make test", "make")
+    } else {
+        eprintln!("{}", "No test runner detected. Supported: cargo, npm, pytest, go, make".dimmed());
+        return;
+    };
+
+    let full_cmd = if extra_args.is_empty() {
+        cmd.to_string()
+    } else {
+        format!("{} {}", cmd, extra_args)
+    };
+
+    eprintln!("{} {} ({})", "Testing:".cyan().bold(), full_cmd, runner_name);
+
+    match tokio::process::Command::new("bash")
+        .arg("-c")
+        .arg(&full_cmd)
+        .env("TERM", "dumb")
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .await
+    {
+        Ok(status) => {
+            if status.success() {
+                eprintln!("{}", "Tests passed.".green().bold());
+            } else {
+                eprintln!(
+                    "{} exit code {}",
+                    "Tests failed.".red().bold(),
+                    status.code().unwrap_or(-1)
+                );
+            }
+        }
+        Err(e) => eprintln!("{} {}", "Failed to run tests:".red(), e),
+    }
 }
 
 async fn auto_commit(agent: &mut Agent, msg_override: &str) {
@@ -636,7 +800,6 @@ async fn fetch_web(agent: &mut Agent, url: &str) {
 fn strip_html_tags(html: &str) -> String {
     let mut result = String::new();
     let mut in_tag = false;
-    let in_script = false;
 
     for c in html.chars() {
         if c == '<' {
@@ -647,17 +810,11 @@ fn strip_html_tags(html: &str) -> String {
             in_tag = false;
             continue;
         }
-        if in_tag {
-            // Check for script/style tags
-            continue;
-        }
-        if !in_script {
+        if !in_tag {
             result.push(c);
         }
     }
 
-    // Collapse whitespace
-    let _ = in_script; // suppress warning
     let lines: Vec<&str> = result
         .lines()
         .map(|l| l.trim())
@@ -785,10 +942,13 @@ Commands:
   /commit [msg]   Auto-generate commit message and commit (or use provided msg)
   /web <url>      Fetch URL content into context
   /export [file]  Export conversation as markdown (default: conversation.md)
+  /test [args]    Detect test runner and run tests (cargo/npm/pytest/go)
   /help           Show this help
 
 Input:
   End a line with \ to continue on the next line (multiline)
+  @file.rs        Auto-read file and inject contents into prompt
+  @file.rs:10-20  Read specific line range
 
 Pipe mode:
   echo "fix the bug" | microvibe           # stdin as prompt
