@@ -84,6 +84,7 @@ pub struct TuiApp {
     pub stats: SessionStats,
     pub waiting: bool,
     pub approval_pending: bool,
+    pub auto_approve: bool,
     input_history: Vec<String>,
     input_history_idx: Option<usize>,
     spinner_tick: usize,
@@ -109,6 +110,7 @@ impl TuiApp {
             stats: SessionStats::default(),
             waiting: false,
             approval_pending: false,
+            auto_approve: false,
             input_history: Vec::new(),
             input_history_idx: None,
             spinner_tick: 0,
@@ -202,7 +204,7 @@ impl TuiApp {
                 .constraints([
                     Constraint::Min(3),
                     Constraint::Length(popup_height),
-                    Constraint::Length(2),
+                    Constraint::Length(3),
                     Constraint::Length(1),
                 ])
                 .split(size);
@@ -215,7 +217,7 @@ impl TuiApp {
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(3),
-                    Constraint::Length(2),
+                    Constraint::Length(3),
                     Constraint::Length(1),
                 ])
                 .split(size);
@@ -451,13 +453,11 @@ impl TuiApp {
 
             match entry {
                 ChatEntry::User(text) => {
-                    // User message with expanding border
-                    for (i, line) in text.lines().enumerate() {
-                        let border = if i == text.lines().count() - 1 { BORDER_END } else { BORDER_V };
-                        lines.push(Line::from(vec![
-                            Span::styled(format!(" {} ", border), Style::default().fg(Color::Blue)),
-                            Span::styled(line.to_string(), Style::default().fg(Color::White)),
-                        ]));
+                    for line in text.lines() {
+                        lines.push(Line::from(Span::styled(
+                            format!("  {}", line),
+                            Style::default().fg(Color::White),
+                        )));
                     }
                 }
                 ChatEntry::Assistant(text) => {
@@ -759,7 +759,7 @@ impl TuiApp {
         } else if self.input.starts_with('!') {
             ("!", Color::Red)
         } else {
-            (">", Color::Cyan)
+            (">", Color::Green)
         };
 
         let display_text = if self.approval_pending {
@@ -781,7 +781,7 @@ impl TuiApp {
         } else if self.waiting {
             Color::DarkGray
         } else {
-            prompt_color
+            Color::Green
         };
 
         let title = if self.approval_pending {
@@ -790,32 +790,62 @@ impl TuiApp {
             " microvibe "
         };
 
-        // Simple single-line input: "> text" with no border widget
-        let input_text = if self.approval_pending {
-            format!("{} [y]es / [n]o / [a]lways", prompt)
-        } else if self.input.is_empty() && !self.waiting {
-            format!("{} ", prompt)
+        // Vibe-style: full bordered input box
+        let input_content = if self.approval_pending {
+            "[y]es / [n]o / [a]lways".to_string()
         } else {
-            format!("{} {}", prompt, &self.input)
+            self.input.clone()
         };
 
-        let input = Paragraph::new(Line::from(vec![
-            Span::styled(&input_text, input_style),
-        ]))
-        .block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(border_color))
-                .title(Span::styled(
-                    format!(" {} ", title.trim()),
-                    Style::default().fg(border_color).add_modifier(Modifier::BOLD),
-                )),
-        );
+        let input_line = Line::from(vec![
+            Span::styled(
+                format!("{} ", prompt),
+                Style::default().fg(prompt_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(input_content, input_style),
+        ]);
+
+        // Right-side label (like Vibe's "auto approve")
+        let right_label = if self.auto_approve {
+            " auto approve "
+        } else {
+            ""
+        };
+
+        // CWD for bottom-right (like Vibe's "agentree" / path)
+        let cwd_label = std::env::current_dir()
+            .map(|p| {
+                let s = p.display().to_string();
+                let home = dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_default();
+                if s.starts_with(&home) {
+                    format!(" ~{} ", &s[home.len()..])
+                } else {
+                    format!(" {} ", s)
+                }
+            })
+            .unwrap_or_else(|_| " . ".to_string());
+
+        let mut block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color))
+            .title_bottom(
+                Line::from(Span::styled(&cwd_label, Style::default().fg(Color::DarkGray)))
+                    .right_aligned(),
+            );
+
+        if !right_label.is_empty() {
+            block = block.title_top(
+                Line::from(Span::styled(right_label, Style::default().fg(Color::Red)))
+                    .right_aligned(),
+            );
+        }
+
+        let input = Paragraph::new(input_line).block(block);
         f.render_widget(input, area);
 
         if !self.waiting && !self.approval_pending {
             f.set_cursor_position((
-                area.x + self.cursor_pos as u16 + 3, // border + "> "
+                area.x + self.cursor_pos as u16 + 3, // border(1) + "> "(2)
                 area.y + 1,
             ));
         }

@@ -41,6 +41,7 @@ pub async fn run_tui(
     )));
 
     let mut app = TuiApp::new(model, provider_name, max_context_tokens);
+    app.auto_approve = auto_approve;
     let mut session = Session::new(model, provider_name);
 
     app.add_entry(ChatEntry::System(format!(
