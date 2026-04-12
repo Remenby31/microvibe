@@ -144,6 +144,27 @@ pub fn tool_definitions() -> Vec<AvailableTool> {
                 }),
             },
         },
+        AvailableTool {
+            tool_type: "function".into(),
+            function: FunctionDef {
+                name: "list_dir".into(),
+                description: "List directory contents with file sizes and types. Shows files and subdirectories.".into(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Directory path to list (default: current dir)"
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "description": "List recursively (default: false, max 2 levels)"
+                        }
+                    },
+                    "required": []
+                }),
+            },
+        },
     ]
 }
 
@@ -155,6 +176,7 @@ pub async fn execute_tool(name: &str, args: &serde_json::Value) -> String {
         "search_replace" => tool_search_replace(args),
         "grep" => tool_grep(args).await,
         "glob" => tool_glob(args),
+        "list_dir" => tool_list_dir(args),
         _ => format!("Unknown tool: {}", name),
     }
 }
@@ -436,5 +458,81 @@ fn tool_glob(args: &serde_json::Value) -> String {
             }
         }
         Err(e) => format!("Invalid glob pattern: {}", e),
+    }
+}
+
+fn tool_list_dir(args: &serde_json::Value) -> String {
+    let path = args["path"].as_str().unwrap_or(".");
+    let recursive = args["recursive"].as_bool().unwrap_or(false);
+
+    list_dir_inner(Path::new(path), recursive, 0, 2)
+}
+
+fn list_dir_inner(path: &Path, recursive: bool, depth: usize, max_depth: usize) -> String {
+    const SKIP: &[&str] = &[
+        ".git",
+        "node_modules",
+        "target",
+        "__pycache__",
+        ".venv",
+        "dist",
+        ".next",
+    ];
+
+    let entries = match std::fs::read_dir(path) {
+        Ok(e) => e,
+        Err(e) => return format!("Error reading {}: {}", path.display(), e),
+    };
+
+    let indent = "  ".repeat(depth);
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if SKIP.contains(&name.as_str()) {
+            continue;
+        }
+
+        let meta = entry.metadata();
+        if let Ok(meta) = meta {
+            if meta.is_dir() {
+                dirs.push(name);
+            } else {
+                let size = meta.len();
+                let size_str = format_size(size);
+                files.push(format!("{}{} ({})", indent, name, size_str));
+            }
+        }
+    }
+
+    dirs.sort();
+    files.sort();
+
+    let mut result = String::new();
+    for dir in &dirs {
+        result.push_str(&format!("{}{}/\n", indent, dir));
+        if recursive && depth < max_depth {
+            result.push_str(&list_dir_inner(&path.join(dir), recursive, depth + 1, max_depth));
+        }
+    }
+    for file in &files {
+        result.push_str(&format!("{}\n", file));
+    }
+
+    if result.is_empty() {
+        format!("{}(empty)\n", indent)
+    } else {
+        result
+    }
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{}B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }

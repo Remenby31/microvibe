@@ -242,7 +242,7 @@ impl Agent {
 
 /// Tools that only read data and can be safely parallelized
 fn is_readonly_tool(name: &str) -> bool {
-    matches!(name, "read_file" | "grep" | "glob")
+    matches!(name, "read_file" | "grep" | "glob" | "list_dir")
 }
 
 fn extract_approval_prefix(name: &str, args: &serde_json::Value) -> String {

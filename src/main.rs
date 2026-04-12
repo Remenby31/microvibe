@@ -133,13 +133,15 @@ fn build_system_prompt() -> String {
 - When writing code, prioritize correctness and simplicity.
 
 # Tools
-You have: bash, read_file, write_file, search_replace, grep, glob.
+You have: bash, read_file, write_file, search_replace, grep, glob, list_dir.
 - bash: run shell commands. Use for builds, tests, git, installs.
 - read_file: read with line numbers. Prefer over `cat`.
 - write_file: create new files. Only for new files or complete rewrites.
 - search_replace: edit existing files with exact string matching.
 - grep: search file contents with regex. Prefer over `grep` in bash.
 - glob: find files by pattern. Prefer over `find` in bash.
+- list_dir: list directory contents with sizes. Prefer over `ls` in bash.
+When you need to read multiple files, call read_file for each in the same response — they execute in parallel.
 
 # Safety
 - Never run destructive commands without confirming.
@@ -332,8 +334,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        // Handle slash commands
-        let handled = match input {
+        // Handle slash commands (including those with arguments)
+        let (cmd, cmd_args) = if input.starts_with('/') {
+            let mut parts = input.splitn(2, ' ');
+            (parts.next().unwrap_or(""), parts.next().unwrap_or(""))
+        } else {
+            ("", "")
+        };
+
+        let handled = match cmd {
             "/quit" | "/exit" | "/q" => break,
             "/clear" => {
                 let client =
@@ -401,8 +410,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 show_git_diff();
                 true
             }
+            "/commit" => {
+                auto_commit(&mut agent, cmd_args).await;
+                true
+            }
+            "/web" => {
+                if cmd_args.is_empty() {
+                    eprintln!("{}", "Usage: /web <url>".dimmed());
+                } else {
+                    fetch_web(&mut agent, cmd_args).await;
+                }
+                true
+            }
+            "/export" => {
+                export_conversation(&agent, cmd_args);
+                true
+            }
             "/help" => {
                 print_help();
+                true
+            }
+            _ if input.starts_with('/') => {
+                eprintln!("{} Unknown command: {}", "?".yellow(), cmd);
                 true
             }
             _ => false,
@@ -470,6 +499,234 @@ fn print_banner(model: &str, provider: &str) {
     );
 }
 
+async fn auto_commit(agent: &mut Agent, msg_override: &str) {
+    // Get the diff
+    let diff_output = std::process::Command::new("git")
+        .args(["diff", "--staged", "--stat"])
+        .output();
+
+    let has_staged = diff_output
+        .as_ref()
+        .map(|o| !o.stdout.is_empty())
+        .unwrap_or(false);
+
+    if !has_staged {
+        // Nothing staged, stage all changes
+        eprintln!("{}", "No staged changes, staging all...".dimmed());
+        let _ = std::process::Command::new("git")
+            .args(["add", "-A"])
+            .output();
+    }
+
+    let diff = std::process::Command::new("git")
+        .args(["diff", "--staged"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    if diff.trim().is_empty() {
+        eprintln!("{}", "No changes to commit.".dimmed());
+        return;
+    }
+
+    let commit_msg = if !msg_override.is_empty() {
+        msg_override.to_string()
+    } else {
+        // Ask LLM to generate commit message
+        eprintln!("{}", "Generating commit message...".dimmed());
+        let truncated_diff = if diff.len() > 8000 {
+            format!("{}...\n(diff truncated)", &diff[..8000])
+        } else {
+            diff.clone()
+        };
+
+        let prompt = format!(
+            "Generate a concise git commit message for this diff. Output ONLY the commit message, nothing else. Use conventional commit format (feat/fix/refactor/docs/etc). Max 72 chars for the first line.\n\n```diff\n{}\n```",
+            truncated_diff
+        );
+
+        match agent.run_turn(&prompt).await {
+            Ok(_) => {
+                // Get the last assistant message
+                agent
+                    .messages()
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == crate::types::Role::Assistant)
+                    .and_then(|m| m.content.clone())
+                    .unwrap_or_else(|| "update code".into())
+                    .trim()
+                    .trim_matches('`')
+                    .trim()
+                    .to_string()
+            }
+            Err(e) => {
+                eprintln!("{} {}", "Error generating message:".red(), e);
+                return;
+            }
+        }
+    };
+
+    eprintln!("\n  {} {}", "Commit:".green().bold(), commit_msg);
+    eprint!("  {} ", "Proceed? [y/n]".cyan());
+    io::stderr().flush().ok();
+
+    let mut answer = String::new();
+    if io::stdin().read_line(&mut answer).is_ok() && answer.trim().to_lowercase().starts_with('y')
+    {
+        match std::process::Command::new("git")
+            .args(["commit", "-m", &commit_msg])
+            .output()
+        {
+            Ok(output) => {
+                let out = String::from_utf8_lossy(&output.stdout);
+                eprintln!("{}", out.trim().green());
+            }
+            Err(e) => eprintln!("{} {}", "Commit failed:".red(), e),
+        }
+    } else {
+        eprintln!("{}", "Commit cancelled.".dimmed());
+    }
+}
+
+async fn fetch_web(agent: &mut Agent, url: &str) {
+    eprintln!("{} {}", "Fetching:".dimmed(), url);
+
+    // Use curl for reliability
+    match tokio::process::Command::new("curl")
+        .args(["-sL", "--max-time", "15", "-A", "microvibe/0.6", url])
+        .output()
+        .await
+    {
+        Ok(output) => {
+            let body = String::from_utf8_lossy(&output.stdout);
+            if body.is_empty() {
+                eprintln!("{}", "Empty response.".dimmed());
+                return;
+            }
+
+            // Strip HTML tags for readability (rough)
+            let clean = strip_html_tags(&body);
+            let truncated = if clean.len() > 12_000 {
+                format!("{}...\n(truncated)", &clean[..12_000])
+            } else {
+                clean
+            };
+
+            // Inject as context
+            let context_msg = format!(
+                "I fetched the content from {}. Here it is:\n\n```\n{}\n```\n\nWhat would you like to know about this?",
+                url, truncated
+            );
+            // Add as user message directly for context
+            eprintln!(
+                "{} {} chars injected into context",
+                "Done:".green(),
+                truncated.len()
+            );
+
+            if let Err(e) = agent.run_turn(&context_msg).await {
+                eprintln!("{} {}", "Error:".red(), e);
+            }
+        }
+        Err(e) => eprintln!("{} {}", "Fetch failed:".red(), e),
+    }
+}
+
+fn strip_html_tags(html: &str) -> String {
+    let mut result = String::new();
+    let mut in_tag = false;
+    let in_script = false;
+
+    for c in html.chars() {
+        if c == '<' {
+            in_tag = true;
+            continue;
+        }
+        if c == '>' {
+            in_tag = false;
+            continue;
+        }
+        if in_tag {
+            // Check for script/style tags
+            continue;
+        }
+        if !in_script {
+            result.push(c);
+        }
+    }
+
+    // Collapse whitespace
+    let _ = in_script; // suppress warning
+    let lines: Vec<&str> = result
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines.join("\n")
+}
+
+fn export_conversation(agent: &Agent, filename: &str) {
+    let path = if filename.is_empty() {
+        "conversation.md"
+    } else {
+        filename
+    };
+
+    let mut md = String::new();
+    md.push_str("# Microvibe Conversation\n\n");
+
+    for msg in agent.messages() {
+        match msg.role {
+            crate::types::Role::System => continue, // Skip system prompt
+            crate::types::Role::User => {
+                md.push_str("## User\n\n");
+                md.push_str(msg.content.as_deref().unwrap_or(""));
+                md.push_str("\n\n");
+            }
+            crate::types::Role::Assistant => {
+                md.push_str("## Assistant\n\n");
+                if let Some(ref content) = msg.content {
+                    md.push_str(content);
+                    md.push_str("\n\n");
+                }
+                if let Some(ref tcs) = msg.tool_calls {
+                    for tc in tcs {
+                        md.push_str(&format!(
+                            "**Tool call:** `{}({})`\n\n",
+                            tc.function.name,
+                            tc.function.arguments.chars().take(100).collect::<String>()
+                        ));
+                    }
+                }
+            }
+            crate::types::Role::Tool => {
+                let name = msg.name.as_deref().unwrap_or("tool");
+                let content = msg.content.as_deref().unwrap_or("");
+                let preview = if content.len() > 200 {
+                    format!("{}...", &content[..200])
+                } else {
+                    content.to_string()
+                };
+                md.push_str(&format!(
+                    "<details><summary>Tool result: {}</summary>\n\n```\n{}\n```\n</details>\n\n",
+                    name, preview
+                ));
+            }
+        }
+    }
+
+    match std::fs::write(path, &md) {
+        Ok(_) => eprintln!(
+            "{} {} ({} bytes)",
+            "Exported:".green(),
+            path,
+            md.len()
+        ),
+        Err(e) => eprintln!("{} {}", "Export failed:".red(), e),
+    }
+}
+
 fn show_git_diff() {
     match std::process::Command::new("git")
         .args(["diff", "--stat", "--color=always"])
@@ -516,16 +773,19 @@ fn print_help() {
         "{}",
         r#"
 Commands:
-  /quit, /q     Exit
-  /clear        Clear conversation context
-  /stats        Show token usage and cost
-  /save         Save current session
-  /sessions     List saved sessions
-  /undo         Undo last turn (up to 10 checkpoints)
-  /compact      Force context compaction now
-  /context      Show conversation message list
-  /diff         Show git diff of changes
-  /help         Show this help
+  /quit, /q       Exit
+  /clear          Clear conversation context
+  /stats          Show token usage and cost
+  /save           Save current session
+  /sessions       List saved sessions
+  /undo           Undo last turn (up to 10 checkpoints)
+  /compact        Force context compaction now
+  /context        Show conversation message list
+  /diff           Show git diff of changes
+  /commit [msg]   Auto-generate commit message and commit (or use provided msg)
+  /web <url>      Fetch URL content into context
+  /export [file]  Export conversation as markdown (default: conversation.md)
+  /help           Show this help
 
 Input:
   End a line with \ to continue on the next line (multiline)
