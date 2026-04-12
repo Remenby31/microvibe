@@ -715,6 +715,21 @@ impl TuiApp {
                 else { self.toggle_last_collapsible(); }
                 KeyAction::None
             }
+            // Up/Down in completion popup: navigate suggestions
+            (_, KeyCode::Up) if !self.completions.is_empty() => {
+                if let Some(ref mut idx) = self.completion_idx {
+                    if *idx > 0 { *idx -= 1; }
+                }
+                KeyAction::None
+            }
+            (_, KeyCode::Down) if !self.completions.is_empty() => {
+                if let Some(ref mut idx) = self.completion_idx {
+                    if *idx + 1 < self.completions.len() { *idx += 1; }
+                } else if !self.completions.is_empty() {
+                    self.completion_idx = Some(0);
+                }
+                KeyAction::None
+            }
             (KeyModifiers::SHIFT, KeyCode::Enter) => {
                 self.input.insert(self.cursor_pos, '\n');
                 self.cursor_pos += 1;
@@ -917,12 +932,16 @@ fn render_md_line(text: &str) -> Line<'static> {
     if owned.starts_with("## ") { return Line::from(Span::styled(format!("  {}", &owned[3..]), style(ANSI_DEFAULT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED))); }
     if owned.starts_with("# ") { return Line::from(Span::styled(format!("  {}", &owned[2..]), style(ANSI_DEFAULT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED))); }
 
-    // Bullets
+    // Bullets — content goes through inline parser for **bold** and `code`
     if owned.starts_with("- ") || owned.starts_with("* ") {
-        return Line::from(vec![Span::raw("  • "), Span::raw(owned[2..].to_string())]);
+        let mut spans = vec![Span::raw("  • ")];
+        spans.extend(parse_inline(&owned[2..]));
+        return Line::from(spans);
     }
     if owned.starts_with("  - ") || owned.starts_with("  * ") {
-        return Line::from(vec![Span::raw("    ◦ "), Span::raw(owned[4..].to_string())]);
+        let mut spans = vec![Span::raw("    ◦ ")];
+        spans.extend(parse_inline(&owned[4..]));
+        return Line::from(spans);
     }
 
     // Blockquote
@@ -931,6 +950,16 @@ fn render_md_line(text: &str) -> Line<'static> {
             Span::styled("  ▎ ", style(ANSI_BRIGHT_BLACK)),
             Span::styled(owned[2..].to_string(), style(ANSI_BRIGHT_BLACK)),
         ]);
+    }
+
+    // Numbered lists: 1. text, 2. text, etc.
+    if let Some(dot_pos) = owned.find(". ") {
+        let num_part = owned[..dot_pos].trim();
+        if dot_pos <= 4 && num_part.chars().all(|c| c.is_ascii_digit()) {
+            let mut spans = vec![Span::raw(format!("  {}. ", num_part))];
+            spans.extend(parse_inline(&owned[dot_pos + 2..]));
+            return Line::from(spans);
+        }
     }
 
     // Horizontal rule
@@ -942,10 +971,10 @@ fn render_md_line(text: &str) -> Line<'static> {
     render_inline_spans(&owned)
 }
 
-/// Parse **bold** and `code` into styled spans
-fn render_inline_spans(text: &str) -> Line<'static> {
+/// Parse inline markdown (**bold**, `code`) into spans
+fn parse_inline(text: &str) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
-    let mut current = String::from("  ");
+    let mut current = String::new();
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
 
@@ -974,6 +1003,13 @@ fn render_inline_spans(text: &str) -> Line<'static> {
         i += 1;
     }
     if !current.is_empty() { spans.push(Span::raw(current)); }
+    spans
+}
+
+/// Render a full line with inline formatting (adds indent)
+fn render_inline_spans(text: &str) -> Line<'static> {
+    let mut spans = vec![Span::raw("  ".to_string())];
+    spans.extend(parse_inline(text));
     Line::from(spans)
 }
 
