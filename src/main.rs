@@ -6,6 +6,7 @@ mod llm;
 mod memory;
 mod pricing;
 mod project;
+mod render;
 mod session;
 mod tools;
 mod types;
@@ -242,7 +243,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         });
 
-    let model = cli
+    let mut model = cli
         .model
         .unwrap_or_else(|| config.default.model.clone());
 
@@ -504,6 +505,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("{}", "Persistent memory:".cyan().bold());
                     eprintln!("{}", mem);
                 }
+                true
+            }
+            "/model" => {
+                if cmd_args.is_empty() {
+                    eprintln!("{} {}", "Current model:".cyan(), model.yellow());
+                    let p = pricing::get_pricing(&model);
+                    eprintln!("  {} ${}/M in, ${}/M out", "Pricing:".dimmed(), p.input, p.output);
+                } else {
+                    model = cmd_args.to_string();
+                    let client = LlmClient::new(&api_base, &api_key, &model, config.default.temperature, backend);
+                    agent = Agent::new(client, &system_prompt, auto_approve, config.default.max_context_tokens);
+                    current_session = Session::new(&model, &provider_name);
+                    let p = pricing::get_pricing(&model);
+                    eprintln!("{} {} (${}/M in, ${}/M out)", "Switched to:".green(), model.yellow(), p.input, p.output);
+                }
+                true
+            }
+            "/cost" => {
+                let s = &agent.stats;
+                let p = pricing::get_pricing(&model);
+                let cost = s.estimated_cost(p.input, p.output);
+                eprintln!("{}", "Cost breakdown:".cyan().bold());
+                eprintln!("  Model: {}", model.yellow());
+                eprintln!("  Input:  {} tokens x ${}/M = ${:.6}", s.prompt_tokens, p.input, s.prompt_tokens as f64 / 1_000_000.0 * p.input);
+                eprintln!("  Output: {} tokens x ${}/M = ${:.6}", s.completion_tokens, p.output, s.completion_tokens as f64 / 1_000_000.0 * p.output);
+                eprintln!("  {} ${:.4}", "Total:".bold(), cost);
                 true
             }
             "/help" => {
@@ -1177,6 +1204,8 @@ Commands:
   /export [file]  Export conversation as markdown (default: conversation.md)
   /test [args]    Detect test runner and run tests (cargo/npm/pytest/go)
   /memory         Show persistent memory contents
+  /model [name]   Show or switch model (clears context)
+  /cost           Show detailed cost breakdown
   /help           Show this help
 
 Shortcuts:

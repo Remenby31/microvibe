@@ -1,3 +1,4 @@
+use crate::render::{MarkdownRenderer, Spinner};
 use crate::types::*;
 use colored::Colorize;
 use futures_util::StreamExt;
@@ -287,7 +288,7 @@ fn convert_to_anthropic_message(msg: &Message) -> serde_json::Value {
     })
 }
 
-/// Parse OpenAI SSE stream
+/// Parse OpenAI SSE stream with markdown rendering and spinner
 async fn parse_openai_stream(
     resp: reqwest::Response,
 ) -> Result<(Message, Usage), Box<dyn std::error::Error>> {
@@ -296,6 +297,9 @@ async fn parse_openai_stream(
     let mut usage = Usage::default();
     let mut stream = resp.bytes_stream();
     let mut buffer = String::new();
+    let mut spinner = Spinner::start("thinking");
+    let _renderer = MarkdownRenderer::new();
+    let mut first_token = true;
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result?;
@@ -326,11 +330,21 @@ async fn parse_openai_stream(
             for choice in &parsed.choices {
                 if let Some(delta) = &choice.delta {
                     if let Some(c) = &delta.content {
+                        if first_token {
+                            spinner.stop();
+                            first_token = false;
+                        }
                         content.push_str(c);
+                        // Use simple print for now — markdown renderer
+                        // has issues with partial lines during streaming
                         print!("{}", c);
                         std::io::stdout().flush().ok();
                     }
                     if let Some(tcs) = &delta.tool_calls {
+                        if first_token {
+                            spinner.stop();
+                            first_token = false;
+                        }
                         for tc in tcs {
                             let idx = tc.index.unwrap_or(0);
                             while tool_calls.len() <= idx {
@@ -360,6 +374,9 @@ async fn parse_openai_stream(
             }
         }
     }
+
+    spinner.stop();
+    drop(_renderer);
 
     if !content.is_empty() {
         println!();
@@ -396,6 +413,8 @@ async fn parse_anthropic_stream(
     let mut current_tool_id = String::new();
     let mut current_tool_name = String::new();
     let mut current_tool_input = String::new();
+    let mut spinner = Spinner::start("thinking");
+    let mut first_token = true;
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result?;
@@ -438,6 +457,10 @@ async fn parse_anthropic_stream(
                     match delta["type"].as_str() {
                         Some("text_delta") => {
                             if let Some(text) = delta["text"].as_str() {
+                                if first_token {
+                                    spinner.stop();
+                                    first_token = false;
+                                }
                                 content.push_str(text);
                                 print!("{}", text);
                                 std::io::stdout().flush().ok();
@@ -479,6 +502,8 @@ async fn parse_anthropic_stream(
             }
         }
     }
+
+    spinner.stop();
 
     if !content.is_empty() {
         println!();
