@@ -11,9 +11,9 @@ use agent::Agent;
 use clap::Parser;
 use colored::Colorize;
 use config::Config;
-use llm::LlmClient;
+use llm::{Backend, LlmClient};
 use session::Session;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 
 #[derive(Parser)]
 #[command(name = "microvibe", version, about = "Ultra-light CLI coding agent in Rust")]
@@ -221,10 +221,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| config.default.model.clone());
 
     let auto_approve = cli.auto_approve || config.default.auto_approve;
+    let backend = Backend::from_str(
+        &provider
+            .as_ref()
+            .map(|p| p.backend.clone())
+            .unwrap_or_else(|| "openai".into()),
+    );
 
-    let client = LlmClient::new(&api_base, &api_key, &model, config.default.temperature);
+    let client = LlmClient::new(&api_base, &api_key, &model, config.default.temperature, backend);
     let system_prompt = build_system_prompt();
     let mut agent = Agent::new(client, &system_prompt, auto_approve, config.default.max_context_tokens);
+
+    // Pipe mode: if stdin is not a terminal, read all stdin and prepend to prompt
+    let piped_input = if !atty_is_tty() {
+        let mut buf = String::new();
+        io::stdin().read_to_string(&mut buf).ok();
+        if buf.trim().is_empty() {
+            None
+        } else {
+            Some(buf)
+        }
+    } else {
+        None
+    };
 
     // Create session for persistence
     let mut current_session = Session::new(&model, &provider_name);
@@ -236,7 +255,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("{} {}", "Resumed session:".green(), &session_id[..8]);
                 current_session = s;
                 // Rebuild agent with loaded messages
-                let client = LlmClient::new(&api_base, &api_key, &model, config.default.temperature);
+                let client = LlmClient::new(&api_base, &api_key, &model, config.default.temperature, backend);
                 agent = Agent::new(client, &system_prompt, auto_approve, config.default.max_context_tokens);
             }
             Err(e) => {
@@ -245,11 +264,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Single prompt mode
+    // Single prompt mode (with optional piped stdin)
     if let Some(prompt) = cli.prompt {
-        agent.run_turn(&prompt).await?;
+        let full_prompt = if let Some(ref piped) = piped_input {
+            format!("{}\n\n---\nStdin:\n```\n{}\n```", prompt, piped.trim())
+        } else {
+            prompt
+        };
+        agent.run_turn(&full_prompt).await?;
         print_stats(&agent);
-        // Save session
+        current_session.messages = agent.messages().to_vec();
+        current_session.stats = agent.stats.clone();
+        let _ = current_session.save();
+        return Ok(());
+    }
+
+    // Pipe-only mode (stdin without -p): use piped content as the prompt
+    if let Some(piped) = piped_input {
+        agent.run_turn(&piped).await?;
+        print_stats(&agent);
         current_session.messages = agent.messages().to_vec();
         current_session.stats = agent.stats.clone();
         let _ = current_session.save();
@@ -304,7 +337,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/quit" | "/exit" | "/q" => break,
             "/clear" => {
                 let client =
-                    LlmClient::new(&api_base, &api_key, &model, config.default.temperature);
+                    LlmClient::new(&api_base, &api_key, &model, config.default.temperature, backend);
                 agent = Agent::new(client, &system_prompt, auto_approve, config.default.max_context_tokens);
                 current_session = Session::new(&model, &provider_name);
                 eprintln!("{}", "Context cleared.".dimmed());
@@ -362,6 +395,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let tools = m.tool_calls.as_ref().map(|t| format!(" [{}tools]", t.len())).unwrap_or_default();
                     eprintln!("  {:>3} {} {}{}", i, role.cyan(), preview.dimmed(), tools.dimmed());
                 }
+                true
+            }
+            "/diff" => {
+                show_git_diff();
                 true
             }
             "/help" => {
@@ -433,6 +470,47 @@ fn print_banner(model: &str, provider: &str) {
     );
 }
 
+fn show_git_diff() {
+    match std::process::Command::new("git")
+        .args(["diff", "--stat", "--color=always"])
+        .output()
+    {
+        Ok(output) => {
+            let stat = String::from_utf8_lossy(&output.stdout);
+            if stat.trim().is_empty() {
+                eprintln!("{}", "No changes.".dimmed());
+            } else {
+                eprintln!("{}", stat);
+                // Also show the full diff (truncated)
+                if let Ok(full) = std::process::Command::new("git")
+                    .args(["diff", "--color=always"])
+                    .output()
+                {
+                    let diff = String::from_utf8_lossy(&full.stdout);
+                    let lines: Vec<&str> = diff.lines().collect();
+                    for line in lines.iter().take(80) {
+                        eprintln!("{}", line);
+                    }
+                    if lines.len() > 80 {
+                        eprintln!(
+                            "  {} ({} more lines)",
+                            "...".dimmed(),
+                            lines.len() - 80
+                        );
+                    }
+                }
+            }
+        }
+        Err(_) => eprintln!("{}", "Not a git repository.".dimmed()),
+    }
+}
+
+/// Check if stdin is a TTY (for pipe detection)
+fn atty_is_tty() -> bool {
+    use std::os::unix::io::AsRawFd;
+    unsafe { libc::isatty(io::stdin().as_raw_fd()) != 0 }
+}
+
 fn print_help() {
     eprintln!(
         "{}",
@@ -446,18 +524,22 @@ Commands:
   /undo         Undo last turn (up to 10 checkpoints)
   /compact      Force context compaction now
   /context      Show conversation message list
+  /diff         Show git diff of changes
   /help         Show this help
 
 Input:
   End a line with \ to continue on the next line (multiline)
 
-Flags:
-  --auto-approve   Skip tool approval prompts
-  --provider X     Use provider X from config
-  --model X        Override model name
-  --resume ID      Resume a saved session
-  --init           Create default config file
-  -p "prompt"      Run single prompt and exit
+Pipe mode:
+  echo "fix the bug" | microvibe           # stdin as prompt
+  git diff | microvibe -p "review this"    # pipe + prompt
+  cat file.rs | microvibe -p "explain"     # pipe file contents
+
+Providers:
+  --provider mistral     Mistral API (default)
+  --provider anthropic   Anthropic Claude (Messages API)
+  --provider openai      OpenAI
+  --provider local       Local server (llama.cpp, etc.)
 
 Config: ~/.config/microvibe/config.toml
 Project: AGENTS.md or CLAUDE.md in project root
