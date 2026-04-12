@@ -425,30 +425,35 @@ impl TuiApp {
         let mut in_code_block = false;
         let mut prev_was_tool = false;
 
-        // Banner: kitten (braille) + info, like Vibe's layout
+        // Animated banner: braille cat (from Vibe) + info
         if self.show_banner {
-            let cat = [
-                "  ⡠⣒⠄  ⡔⢄⠔⡄",
-                " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣",
-                "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆",
+            // 10 animation frames — cat blinks eyes and wags tail
+            const CAT_FRAMES: &[&[&str]] = &[
+                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"],
+                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡠⣀⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // blink
+                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"],
+                &[" ⢠⢢    ⡔⢄⠔⡄", " ⢸⢸⣀⡔⢉⠱⣃⡢⣂⡣", " ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆"], // tail mid
+                &["⢔⡢⡀    ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // tail left
+                &[" ⢠⢢    ⡔⢄⠔⡄", " ⢸⢸⣀⡔⢉⠱⣃⡢⣂⡣", " ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆"], // tail mid
+                &["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"], // tail right (home)
             ];
+            let frame_idx = (self.spinner_tick / 5) % CAT_FRAMES.len();
+            let cat = CAT_FRAMES[frame_idx];
+
             let orange = Style::default().fg(Color::Rgb(255, 130, 5));
             let dim = Style::default().fg(Color::DarkGray);
 
             lines.push(Line::from(""));
-            // Line 1: cat + brand
             lines.push(Line::from(vec![
                 Span::styled(format!("  {}", cat[0]), orange),
                 Span::styled("  microvibe", orange.add_modifier(Modifier::BOLD)),
                 Span::styled(format!("  v{} · ", env!("CARGO_PKG_VERSION")), dim),
                 Span::styled(&self.model, Style::default().fg(Color::Yellow)),
             ]));
-            // Line 2: cat + meta
             lines.push(Line::from(vec![
                 Span::styled(format!("  {}", cat[1]), orange),
                 Span::styled(format!("  {} · 4 providers", self.provider), dim),
             ]));
-            // Line 3: cat + help hint
             lines.push(Line::from(vec![
                 Span::styled(format!("  {}", cat[2]), orange),
                 Span::styled("  Type ", dim),
