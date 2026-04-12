@@ -140,10 +140,20 @@ impl TuiApp {
     }
 
     pub fn append_assistant_text(&mut self, text: &str) {
-        if let Some(ChatEntry::Assistant(ref mut content)) = self.entries.last_mut() {
-            content.push_str(text);
-            self.scroll_to_bottom();
+        // Find the last Assistant entry (might not be the very last entry due to Thinking/Tool entries)
+        let found = self.entries.iter_mut().rev().any(|e| {
+            if let ChatEntry::Assistant(ref mut content) = e {
+                content.push_str(text);
+                true
+            } else {
+                false
+            }
+        });
+        // If no assistant entry exists, create one
+        if !found {
+            self.entries.push(ChatEntry::Assistant(text.to_string()));
         }
+        self.scroll_to_bottom();
     }
 
     pub fn append_thinking_text(&mut self, new_text: &str) {
@@ -179,29 +189,40 @@ impl TuiApp {
         self.spinner_tick = self.spinner_tick.wrapping_add(1);
         let size = f.area();
 
-        // Compute completion popup height
-        let popup_height = if !self.completions.is_empty() {
+        let has_completions = !self.completions.is_empty();
+        let popup_height = if has_completions {
             (self.completions.len() as u16 + 2).min(10)
         } else {
             0
         };
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(3),           // chat area
-                Constraint::Length(popup_height), // completion popup (0 if none)
-                Constraint::Length(3),         // input box
-                Constraint::Length(1),         // status bar (bottom, like Vibe)
-            ])
-            .split(size);
-
-        self.render_chat(f, chunks[0]);
-        if popup_height > 0 {
+        if has_completions {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(3),
+                    Constraint::Length(popup_height),
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                ])
+                .split(size);
+            self.render_chat(f, chunks[0]);
             self.render_completions(f, chunks[1]);
+            self.render_input(f, chunks[2]);
+            self.render_status(f, chunks[3]);
+        } else {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(3),
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                ])
+                .split(size);
+            self.render_chat(f, chunks[0]);
+            self.render_input(f, chunks[1]);
+            self.render_status(f, chunks[2]);
         }
-        self.render_input(f, chunks[2]);
-        self.render_status(f, chunks[3]);
 
         // Modal overlay
         if self.modal != Modal::None {
