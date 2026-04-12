@@ -8,6 +8,7 @@ mod pricing;
 mod project;
 mod render;
 mod session;
+mod task;
 mod tools;
 mod types;
 
@@ -259,6 +260,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let system_prompt = build_system_prompt();
     let mut agent = Agent::new(client, &system_prompt, auto_approve, config.default.max_context_tokens);
 
+    // Task store for background agents
+    let task_store = task::new_task_store();
+
     // Pipe mode: if stdin is not a terminal, read all stdin and prepend to prompt
     let piped_input = if !atty_is_tty() {
         let mut buf = String::new();
@@ -504,6 +508,96 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     eprintln!("{}", "Persistent memory:".cyan().bold());
                     eprintln!("{}", mem);
+                }
+                true
+            }
+            "/task" => {
+                if cmd_args.is_empty() {
+                    eprintln!("{}", "Usage: /task <prompt> — spawn a background research agent".dimmed());
+                } else {
+                    task::spawn_task(
+                        task_store.clone(),
+                        cmd_args.to_string(),
+                        api_base.clone(),
+                        api_key.clone(),
+                        model.clone(),
+                        config.default.temperature,
+                        backend,
+                    )
+                    .await;
+                }
+                true
+            }
+            "/tasks" => {
+                let tasks = task_store.lock().await;
+                if tasks.is_empty() {
+                    eprintln!("{}", "No background tasks.".dimmed());
+                } else {
+                    for t in tasks.iter() {
+                        let status_str = match &t.status {
+                            task::TaskStatus::Running => "running".yellow().to_string(),
+                            task::TaskStatus::Completed => "done".green().to_string(),
+                            task::TaskStatus::Failed(e) => format!("{}", e.red()),
+                        };
+                        eprintln!("  {} {} {}", t.id.cyan(), status_str, t.prompt.chars().take(50).collect::<String>().dimmed());
+                        if let Some(ref result) = t.result {
+                            // Show first few lines of result
+                            let preview: String = result.lines().take(5).collect::<Vec<_>>().join("\n");
+                            eprintln!("    {}", preview.dimmed());
+                            if result.lines().count() > 5 {
+                                eprintln!("    {} ({} more lines — /inject {} to add to context)", "...".dimmed(), result.lines().count() - 5, t.id);
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            "/inject" => {
+                if cmd_args.is_empty() {
+                    eprintln!("{}", "Usage: /inject <task-id> — inject task result into context".dimmed());
+                } else {
+                    let tasks = task_store.lock().await;
+                    if let Some(t) = tasks.iter().find(|t| t.id == cmd_args || t.id.starts_with(cmd_args)) {
+                        if let Some(ref result) = t.result {
+                            let inject_msg = format!(
+                                "Background research task completed. Prompt: \"{}\"\n\nResult:\n{}",
+                                t.prompt, result
+                            );
+                            drop(tasks); // release lock before run_turn
+                            if let Err(e) = agent.run_turn(&inject_msg).await {
+                                eprintln!("{} {}", "Error:".red(), e);
+                            }
+                        } else {
+                            eprintln!("{} Task {} is still {}", "Wait:".yellow(), t.id, t.status);
+                        }
+                    } else {
+                        eprintln!("{} Task not found: {}", "?".yellow(), cmd_args);
+                    }
+                }
+                true
+            }
+            "/plan" => {
+                let plan_prompt = if cmd_args.is_empty() {
+                    "Describe what you would do to accomplish the user's last request. List the steps as a numbered plan. Do NOT execute anything yet — just propose the plan."
+                } else {
+                    cmd_args
+                };
+                eprintln!("{}", "Plan mode: agent will propose, not execute.".cyan());
+                if let Err(e) = agent.run_turn(&format!(
+                    "[PLAN MODE — propose a plan, do NOT execute tools]\n{}",
+                    plan_prompt
+                )).await {
+                    eprintln!("{} {}", "Error:".red(), e);
+                }
+                true
+            }
+            "/do" => {
+                // Execute the last proposed plan
+                eprintln!("{}", "Executing plan...".cyan());
+                if let Err(e) = agent.run_turn(
+                    "Execute the plan you just proposed. Do it step by step, using tools as needed."
+                ).await {
+                    eprintln!("{} {}", "Error:".red(), e);
                 }
                 true
             }
@@ -1203,6 +1297,11 @@ Commands:
   /web <url>      Fetch URL content into context
   /export [file]  Export conversation as markdown (default: conversation.md)
   /test [args]    Detect test runner and run tests (cargo/npm/pytest/go)
+  /task <prompt>  Spawn background research agent (read-only)
+  /tasks          List background tasks and results
+  /inject <id>    Inject task result into conversation
+  /plan [prompt]  Agent proposes a plan without executing
+  /do             Execute the last proposed plan
   /memory         Show persistent memory contents
   /model [name]   Show or switch model (clears context)
   /cost           Show detailed cost breakdown
