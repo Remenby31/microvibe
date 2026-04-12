@@ -202,7 +202,7 @@ impl TuiApp {
                 .constraints([
                     Constraint::Min(3),
                     Constraint::Length(popup_height),
-                    Constraint::Length(3),
+                    Constraint::Length(2),
                     Constraint::Length(1),
                 ])
                 .split(size);
@@ -215,7 +215,7 @@ impl TuiApp {
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(3),
-                    Constraint::Length(3),
+                    Constraint::Length(2),
                     Constraint::Length(1),
                 ])
                 .split(size);
@@ -790,22 +790,32 @@ impl TuiApp {
             " microvibe "
         };
 
-        let input = Paragraph::new(display_text)
-            .style(input_style)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(border_color))
-                    .title(Span::styled(
-                        title,
-                        Style::default().fg(border_color).add_modifier(Modifier::BOLD),
-                    )),
-            );
+        // Simple single-line input: "> text" with no border widget
+        let input_text = if self.approval_pending {
+            format!("{} [y]es / [n]o / [a]lways", prompt)
+        } else if self.input.is_empty() && !self.waiting {
+            format!("{} ", prompt)
+        } else {
+            format!("{} {}", prompt, &self.input)
+        };
+
+        let input = Paragraph::new(Line::from(vec![
+            Span::styled(&input_text, input_style),
+        ]))
+        .block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(border_color))
+                .title(Span::styled(
+                    format!(" {} ", title.trim()),
+                    Style::default().fg(border_color).add_modifier(Modifier::BOLD),
+                )),
+        );
         f.render_widget(input, area);
 
         if !self.waiting && !self.approval_pending {
             f.set_cursor_position((
-                area.x + self.cursor_pos as u16 + 3,
+                area.x + self.cursor_pos as u16 + 3, // border + "> "
                 area.y + 1,
             ));
         }
