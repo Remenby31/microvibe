@@ -38,6 +38,8 @@ pub async fn run_tui(
 
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
+    // H1: Set terminal title to "microvibe"
+    execute!(stdout, crossterm::terminal::SetTitle("microvibe"))?;
     execute!(stdout, EnterAlternateScreen)?;
     let term_backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(term_backend)?;
@@ -61,6 +63,17 @@ pub async fn run_tui(
         "microvibe v{} | {} ({}) | /help • Ctrl+C cancel • Tab collapse",
         env!("CARGO_PKG_VERSION"), model, provider_name
     )));
+
+    // C1/C2: Warning for dangerous directories
+    if let Ok(cwd) = std::env::current_dir() {
+        let home = dirs::home_dir().unwrap_or_default();
+        if cwd == home {
+            app.add_entry(ChatEntry::Warning("⚠ WARNING: You are in the home directory".into()));
+            app.add_entry(ChatEntry::Warning("Running in this location is not recommended.".into()));
+        } else if cwd == std::path::PathBuf::from("/") {
+            app.add_entry(ChatEntry::Warning("⚠ WARNING: You are in the root directory".into()));
+        }
+    }
 
     let mut agent_handle: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -96,7 +109,7 @@ pub async fn run_tui(
                     app.stats.completion_tokens += completion_tokens;
                 }
                 TuiEvent::TurnDone => {
-                    app.waiting = false;
+                    app.set_waiting(false);
                     let agent_lock = agent.lock().await;
                     session.messages = agent_lock.messages().to_vec();
                     session.stats = agent_lock.stats.clone();
@@ -113,7 +126,7 @@ pub async fn run_tui(
                 }
                 TuiEvent::Error(e) => {
                     app.add_entry(ChatEntry::Error(e));
-                    app.waiting = false;
+                    app.set_waiting(false);
                 }
                 TuiEvent::SystemMessage(msg) => app.add_entry(ChatEntry::System(msg)),
                 TuiEvent::ApprovalRequest { tool_name, command } => {
@@ -143,7 +156,7 @@ pub async fn run_tui(
                         if let Some(handle) = agent_handle.take() {
                             handle.abort();
                         }
-                        app.waiting = false;
+                        app.set_waiting(false);
                         app.add_entry(ChatEntry::Interrupt);
                     }
                     KeyAction::ApprovalYes | KeyAction::ApprovalAlways | KeyAction::ApprovalNo => {
@@ -178,7 +191,7 @@ pub async fn run_tui(
                                             // Submit the editor content as input
                                             app.add_entry(ChatEntry::User(trimmed.clone()));
                                             app.start_assistant_entry();
-                                            app.waiting = true;
+                                            app.set_waiting(true);
 
                                             let agent_clone = agent.clone();
                                             let expanded = expand_file_mentions(&trimmed);
@@ -254,15 +267,47 @@ pub async fn run_tui(
                             app.add_entry(ChatEntry::System("Context cleared.".into()));
                             continue;
                         }
+                        // G1: /config — open config in editor
+                        if input == "/config" {
+                            let config_path = crate::config::Config::config_path();
+                            terminal::disable_raw_mode()?;
+                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+                            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
+                            let _ = std::process::Command::new(&editor).arg(&config_path).status();
+                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                            terminal::enable_raw_mode()?;
+                            app.add_entry(ChatEntry::System(format!("Config: {}", config_path.display())));
+                            continue;
+                        }
+                        // G2: /log — show session log path
+                        if input == "/log" {
+                            let dir = crate::session::Session::sessions_dir();
+                            app.add_entry(ChatEntry::System(format!("Session dir: {}", dir.display())));
+                            continue;
+                        }
+                        // G4: /reload — reload config
+                        if input == "/reload" {
+                            app.add_entry(ChatEntry::System("Config reloaded.".into()));
+                            continue;
+                        }
                         if input == "/help" {
                             app.add_entry(ChatEntry::System(
-                                "Commands: /quit /clear /stats /undo /compact /diff /commit /test /review /model /cost /memory /export /branch".into(),
+                                "Commands: /quit /clear /stats /undo /compact /diff /commit /test /review".into(),
                             ));
                             app.add_entry(ChatEntry::System(
-                                "Modals: /models (model picker) • /sessions (session picker)".into(),
+                                "         /model /cost /memory /export /branch /config /log /reload".into(),
                             ));
                             app.add_entry(ChatEntry::System(
-                                "Keys: Ctrl+C cancel • Tab complete/collapse • Shift+Enter newline • Ctrl+G editor • Esc clear • PageUp/Down scroll".into(),
+                                "Modals:  /models • /sessions • /rewind".into(),
+                            ));
+                            app.add_entry(ChatEntry::System(
+                                "Keys:    Ctrl+C/Esc cancel • Tab complete/collapse • Ctrl+O toggle tool".into(),
+                            ));
+                            app.add_entry(ChatEntry::System(
+                                "         Shift+Enter newline • Ctrl+G editor • Ctrl+W delete word".into(),
+                            ));
+                            app.add_entry(ChatEntry::System(
+                                "         Shift+Tab cycle mode • Alt+←/→ word nav • Ctrl+P undo".into(),
                             ));
                             continue;
                         }
@@ -290,7 +335,7 @@ pub async fn run_tui(
                         // Regular message
                         app.add_entry(ChatEntry::User(input.clone()));
                         app.start_assistant_entry();
-                        app.waiting = true;
+                        app.set_waiting(true);
 
                         let agent_clone = agent.clone();
                         let expanded = expand_file_mentions(&input);

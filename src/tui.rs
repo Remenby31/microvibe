@@ -25,6 +25,22 @@ const ANSI_BLUE: Color = Color::Blue;
 const SPINNER_PULSE: &[&str] = &["■", "■", "■", "■", "□", "□", "□", "□"];
 const SPINNER_BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+// B2: Easter egg loading messages (from Vibe)
+const LOADING_MESSAGES: &[&str] = &[
+    "Thinking", "Vibing", "Petting le chat", "Eating a chocolatine",
+    "Reading Proust", "Contemplation", "Sending good vibes",
+    "Counting Rs in strawberry", "Seeding Mistral weights",
+    "Wibbling", "Réflexion", "Analyse", "Synthèse",
+];
+
+fn format_elapsed(secs: u64) -> String {
+    if secs < 60 { return format!("{}s", secs); }
+    let (m, s) = (secs / 60, secs % 60);
+    if m < 60 { return format!("{}m{}s", m, s); }
+    let (h, m) = (m / 60, m % 60);
+    format!("{}h{}m{}s", h, m, s)
+}
+
 // ── Vibe's petit_chat animation frames ──
 
 const CAT_FRAMES: &[&[&str]] = &[
@@ -165,6 +181,8 @@ pub struct TuiApp {
     pub modal: Modal,
     show_banner: bool,
     at_bottom: bool,
+    turn_started_at: Option<std::time::Instant>,
+    loading_msg_idx: usize,
 }
 
 impl TuiApp {
@@ -189,6 +207,8 @@ impl TuiApp {
             modal: Modal::None,
             show_banner: true,
             at_bottom: true,
+            turn_started_at: None,
+            loading_msg_idx: 0,
         }
     }
 
@@ -205,6 +225,16 @@ impl TuiApp {
     pub fn clear_entries(&mut self) {
         self.entries.clear();
         self.scroll = 0;
+    }
+
+    pub fn set_waiting(&mut self, waiting: bool) {
+        self.waiting = waiting;
+        if waiting {
+            self.turn_started_at = Some(std::time::Instant::now());
+            self.loading_msg_idx = (self.loading_msg_idx + 1) % LOADING_MESSAGES.len();
+        } else {
+            self.turn_started_at = None;
+        }
     }
 
     pub fn start_assistant_entry(&mut self) {
@@ -341,8 +371,11 @@ impl TuiApp {
                 ChatEntry::Assistant(text) => {
                     if text.is_empty() && self.waiting {
                         let frame = SPINNER_BRAILLE[self.spinner_tick / 2 % SPINNER_BRAILLE.len()];
+                        let msg = LOADING_MESSAGES[self.loading_msg_idx % LOADING_MESSAGES.len()];
+                        let elapsed = self.turn_started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                        let timer = if elapsed > 0 { format!(" ({})", format_elapsed(elapsed)) } else { String::new() };
                         lines.push(Line::from(Span::styled(
-                            format!("  {} thinking...", frame), style(ANSI_BRIGHT_BLACK),
+                            format!("  {} {}…{}", frame, msg, timer), style(ANSI_BRIGHT_BLACK),
                         )));
                     } else {
                         in_code_block = false;
@@ -709,12 +742,60 @@ impl TuiApp {
         }
 
         match (key.modifiers, key.code) {
+            // A1: Esc = interrupt during turn (like Vibe)
+            (_, KeyCode::Esc) if self.waiting => KeyAction::Cancel,
+            // Ctrl+C: cancel if waiting, quit otherwise
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                 if self.waiting { KeyAction::Cancel } else { KeyAction::Quit }
             }
+            // A2: Ctrl+D = force quit
+            (KeyModifiers::CONTROL, KeyCode::Char('d')) => KeyAction::Quit,
+            // Ctrl+Y: copy last
             (KeyModifiers::CONTROL, KeyCode::Char('y')) => KeyAction::CopyLast,
+            // Ctrl+G: external editor
             (KeyModifiers::CONTROL, KeyCode::Char('g')) if !self.waiting => {
                 KeyAction::Submit("/editor".to_string())
+            }
+            // A5: Ctrl+P = rewind previous
+            (KeyModifiers::CONTROL, KeyCode::Char('p')) if !self.waiting => {
+                KeyAction::Submit("/undo".to_string())
+            }
+            // A7: Ctrl+O = toggle last tool result
+            (KeyModifiers::CONTROL, KeyCode::Char('o')) => {
+                self.toggle_last_collapsible();
+                KeyAction::None
+            }
+            // D2: Ctrl+A = select all (go to start)
+            (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
+                self.cursor_pos = 0;
+                KeyAction::None
+            }
+            // D3: Ctrl+W = delete word backward
+            (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
+                if self.cursor_pos > 0 {
+                    let before = &self.input[..self.cursor_pos];
+                    let word_start = before.rfind(' ').map(|p| p + 1).unwrap_or(0);
+                    self.input = format!("{}{}", &self.input[..word_start], &self.input[self.cursor_pos..]);
+                    self.cursor_pos = word_start;
+                    self.update_completions();
+                }
+                KeyAction::None
+            }
+            // D4: Alt+Left = word left
+            (KeyModifiers::ALT, KeyCode::Left) => {
+                if self.cursor_pos > 0 {
+                    let before = &self.input[..self.cursor_pos];
+                    self.cursor_pos = before.rfind(' ').map(|p| p).unwrap_or(0);
+                }
+                KeyAction::None
+            }
+            // D4: Alt+Right = word right
+            (KeyModifiers::ALT, KeyCode::Right) => {
+                if self.cursor_pos < self.input.len() {
+                    let after = &self.input[self.cursor_pos + 1..];
+                    self.cursor_pos = after.find(' ').map(|p| self.cursor_pos + 1 + p + 1).unwrap_or(self.input.len());
+                }
+                KeyAction::None
             }
             // Shift+Tab: cycle agent mode
             (_, KeyCode::BackTab) if !self.waiting => {
@@ -727,7 +808,7 @@ impl TuiApp {
                 else { self.toggle_last_collapsible(); }
                 KeyAction::None
             }
-            // Up/Down in completion popup: navigate suggestions
+            // Up/Down in completion popup
             (_, KeyCode::Up) if !self.completions.is_empty() => {
                 if let Some(ref mut idx) = self.completion_idx {
                     if *idx > 0 { *idx -= 1; }
@@ -740,6 +821,16 @@ impl TuiApp {
                 } else if !self.completions.is_empty() {
                     self.completion_idx = Some(0);
                 }
+                KeyAction::None
+            }
+            // A4: Shift+Up/Down = scroll chat
+            (KeyModifiers::SHIFT, KeyCode::Up) => {
+                self.scroll = self.scroll.saturating_sub(3);
+                self.at_bottom = false;
+                KeyAction::None
+            }
+            (KeyModifiers::SHIFT, KeyCode::Down) => {
+                self.scroll = self.scroll.saturating_add(3);
                 KeyAction::None
             }
             (KeyModifiers::SHIFT, KeyCode::Enter) => {
@@ -939,7 +1030,10 @@ fn tool_icon(name: &str) -> &'static str {
 fn render_md_line(text: &str) -> Line<'static> {
     let owned = text.to_string();
 
-    // Headers
+    // E2: Empty lines — no indent
+    if owned.trim().is_empty() { return Line::from(""); }
+
+    // E3: Headers with margin
     if owned.starts_with("### ") { return Line::from(Span::styled(format!("  {}", &owned[4..]), style(ANSI_DEFAULT).add_modifier(Modifier::BOLD))); }
     if owned.starts_with("## ") { return Line::from(Span::styled(format!("  {}", &owned[3..]), style(ANSI_DEFAULT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED))); }
     if owned.starts_with("# ") { return Line::from(Span::styled(format!("  {}", &owned[2..]), style(ANSI_DEFAULT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED))); }
