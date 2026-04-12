@@ -1,10 +1,9 @@
-use crate::render::{MarkdownRenderer, Spinner};
+use crate::render::{Spinner, StreamRenderer};
 use crate::types::*;
 use colored::Colorize;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::json;
-use std::io::Write;
 use std::time::{Duration, Instant};
 
 const MAX_RETRIES: u32 = 3;
@@ -210,7 +209,7 @@ impl LlmClient {
 
         let resp = self
             .client
-            .post(format!("{}/messages", self.api_base))
+            .post(format!("{}/v1/messages", self.api_base))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("Content-Type", "application/json")
@@ -298,7 +297,7 @@ async fn parse_openai_stream(
     let mut stream = resp.bytes_stream();
     let mut buffer = String::new();
     let mut spinner = Spinner::start("thinking");
-    let _renderer = MarkdownRenderer::new();
+    let mut renderer = StreamRenderer::new();
     let mut first_token = true;
 
     while let Some(chunk_result) = stream.next().await {
@@ -335,10 +334,7 @@ async fn parse_openai_stream(
                             first_token = false;
                         }
                         content.push_str(c);
-                        // Use simple print for now — markdown renderer
-                        // has issues with partial lines during streaming
-                        print!("{}", c);
-                        std::io::stdout().flush().ok();
+                        renderer.push_streaming(c);
                     }
                     if let Some(tcs) = &delta.tool_calls {
                         if first_token {
@@ -376,11 +372,7 @@ async fn parse_openai_stream(
     }
 
     spinner.stop();
-    drop(_renderer);
-
-    if !content.is_empty() {
-        println!();
-    }
+    renderer.finish();
 
     let msg = Message {
         role: Role::Assistant,
@@ -414,6 +406,7 @@ async fn parse_anthropic_stream(
     let mut current_tool_name = String::new();
     let mut current_tool_input = String::new();
     let mut spinner = Spinner::start("thinking");
+    let mut renderer = StreamRenderer::new();
     let mut first_token = true;
 
     while let Some(chunk_result) = stream.next().await {
@@ -462,8 +455,7 @@ async fn parse_anthropic_stream(
                                     first_token = false;
                                 }
                                 content.push_str(text);
-                                print!("{}", text);
-                                std::io::stdout().flush().ok();
+                                renderer.push_streaming(text);
                             }
                         }
                         Some("input_json_delta") => {
@@ -504,10 +496,7 @@ async fn parse_anthropic_stream(
     }
 
     spinner.stop();
-
-    if !content.is_empty() {
-        println!();
-    }
+    renderer.finish();
 
     let msg = Message {
         role: Role::Assistant,

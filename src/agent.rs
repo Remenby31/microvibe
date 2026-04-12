@@ -1,6 +1,7 @@
 use crate::approval::{check_tool_approval, ApprovalResult};
 use crate::compact::compact_messages;
 use crate::llm::LlmClient;
+use crate::render;
 use crate::session::SessionStats;
 use crate::tools::{execute_tool, tool_definitions};
 use crate::types::*;
@@ -262,42 +263,29 @@ fn extract_approval_prefix(name: &str, args: &serde_json::Value) -> String {
 }
 
 fn print_tool_call(name: &str, args: &serde_json::Value) {
-    let (label, detail) = match name {
-        "bash" => ("bash", args["command"].as_str().unwrap_or("?")),
-        "read_file" => ("read", args["path"].as_str().unwrap_or("?")),
-        "write_file" => ("write", args["path"].as_str().unwrap_or("?")),
-        "search_replace" => ("edit", args["path"].as_str().unwrap_or("?")),
-        "grep" => ("grep", args["pattern"].as_str().unwrap_or("?")),
-        "glob" => ("glob", args["pattern"].as_str().unwrap_or("?")),
-        _ => ("tool", name),
+    let detail = match name {
+        "bash" => args["command"].as_str().unwrap_or("?"),
+        "read_file" => args["path"].as_str().unwrap_or("?"),
+        "write_file" => args["path"].as_str().unwrap_or("?"),
+        "search_replace" => args["path"].as_str().unwrap_or("?"),
+        "grep" => args["pattern"].as_str().unwrap_or("?"),
+        "glob" => args["pattern"].as_str().unwrap_or("?"),
+        "list_dir" => args["path"].as_str().unwrap_or("."),
+        _ => name,
     };
-    eprintln!(
-        "  {} {}",
-        format!("{}:", label).cyan().bold(),
-        detail.dimmed()
-    );
+
+    render::print_tool_box(name, detail);
 
     // For search_replace, show a mini diff
     if name == "search_replace" {
         if let (Some(search), Some(replace)) =
             (args["search"].as_str(), args["replace"].as_str())
         {
-            let search_preview: String = search.lines().take(3).collect::<Vec<_>>().join("\\n");
-            let replace_preview: String = replace.lines().take(3).collect::<Vec<_>>().join("\\n");
-            if search_preview.len() < 120 {
-                eprintln!("    {} {}", "-".red(), search_preview.red());
-                eprintln!("    {} {}", "+".green(), replace_preview.green());
-            }
+            render::print_diff_preview(search, replace);
         }
     }
 }
 
 fn print_tool_result(result: &str) {
-    let lines: Vec<&str> = result.lines().collect();
-    let summary = if lines.len() > 3 {
-        format!("{} ({} lines)", lines[0], lines.len())
-    } else {
-        result.chars().take(120).collect()
-    };
-    eprintln!("    {} {}", "=".dimmed(), summary.dimmed());
+    render::print_tool_result_box(result);
 }

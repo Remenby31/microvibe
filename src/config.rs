@@ -4,11 +4,16 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_CONFIG: &str = r#"
 [default]
-provider = "mistral"
-model = "codestral-latest"
+provider = "foundry-anthropic"
+model = "claude-opus-4-6"
 auto_approve = false
-max_context_tokens = 128000
+max_context_tokens = 900000
 temperature = 0.1
+
+[providers.foundry-anthropic]
+api_base = "https://foundry-proxy.cheetah-koi.ts.net/anthropic"
+api_key_env = "ANTHROPIC_FOUNDRY_API_KEY"
+backend = "anthropic"
 
 [providers.mistral]
 api_base = "https://api.mistral.ai/v1"

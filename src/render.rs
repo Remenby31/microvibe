@@ -1,136 +1,216 @@
 use colored::Colorize;
 use std::io::Write;
 
-/// Render streamed text with basic markdown formatting.
-/// Called character-by-character during streaming, accumulates into lines
-/// and renders them with formatting when complete.
-#[allow(dead_code)]
-pub struct MarkdownRenderer {
-    line_buffer: String,
+// ── Box drawing characters ──
+const BOX_TL: &str = "╭";
+const BOX_TR: &str = "╮";
+const BOX_BL: &str = "╰";
+const BOX_BR: &str = "╯";
+const BOX_H: &str = "─";
+const BOX_V: &str = "│";
+
+/// Streaming markdown renderer.
+/// Accumulates characters, renders complete lines with formatting,
+/// and prints partial lines raw for real-time streaming feel.
+pub struct StreamRenderer {
+    /// Buffer for the current incomplete line
+    partial: String,
+    /// Whether we're inside a ``` code block
     in_code_block: bool,
+    /// Language tag of the current code block
     code_lang: String,
+    /// Number of characters printed for the current partial line (for erasure)
+    partial_printed: usize,
 }
 
-#[allow(dead_code)]
-impl MarkdownRenderer {
+impl StreamRenderer {
     pub fn new() -> Self {
         Self {
-            line_buffer: String::new(),
+            partial: String::new(),
             in_code_block: false,
             code_lang: String::new(),
+            partial_printed: 0,
         }
     }
 
-    /// Push streamed text chunk. Renders complete lines immediately.
-    pub fn push(&mut self, text: &str) {
-        for ch in text.chars() {
-            if ch == '\n' {
-                self.render_line();
-                self.line_buffer.clear();
-            } else {
-                self.line_buffer.push(ch);
-            }
+    /// Print a single character as part of the streaming partial line
+    fn print_partial_char(&mut self, ch: char) {
+        if self.in_code_block {
+            print!("{}", format!("{}", ch).dimmed());
+        } else {
+            print!("{}", ch);
         }
-        // Partial line: print inline text as-is for streaming feel
-        if !self.line_buffer.is_empty() && !self.line_buffer.starts_with("```") {
-            if self.in_code_block {
-                print!("{}", &self.line_buffer.dimmed());
-            } else {
-                print!("{}", render_inline(&self.line_buffer));
-            }
+        std::io::stdout().flush().ok();
+        self.partial_printed += 1;
+    }
+
+    /// Erase the partially printed line so we can re-render it formatted
+    fn erase_partial(&mut self) {
+        if self.partial_printed > 0 {
+            // Move cursor to beginning of partial output and clear line
+            print!("\r");
+            print!("{}", " ".repeat(self.partial_printed + 2));
+            print!("\r");
             std::io::stdout().flush().ok();
-            // Don't clear — we'll re-render when the line is complete
-            // Use carriage return to overwrite
-            let len = self.line_buffer.len();
-            print!("{}", "\x08".repeat(len)); // backspace
-            std::io::stdout().flush().ok();
+            self.partial_printed = 0;
         }
     }
 
-    /// Flush any remaining content
-    pub fn flush(&mut self) {
-        if !self.line_buffer.is_empty() {
-            self.render_line();
-            self.line_buffer.clear();
-        }
-        println!();
-    }
-
-    fn render_line(&mut self) {
-        let line = &self.line_buffer;
+    /// Render a complete line with full markdown formatting
+    fn render_complete_line(&self) {
+        let line = &self.partial;
 
         // Code block fences
         if line.starts_with("```") {
             if self.in_code_block {
-                self.in_code_block = false;
-                self.code_lang.clear();
-                println!("{}", "```".dimmed());
+                // Closing fence
+                eprintln!("  {}", BOX_BL.to_string() + &BOX_H.repeat(50) + BOX_BR);
             } else {
-                self.in_code_block = true;
-                self.code_lang = line[3..].trim().to_string();
-                let label = if self.code_lang.is_empty() {
-                    "```".to_string()
+                // Opening fence
+                let lang = line[3..].trim();
+                let label = if lang.is_empty() {
+                    " code ".to_string()
                 } else {
-                    format!("```{}", self.code_lang)
+                    format!(" {} ", lang)
                 };
-                println!("{}", label.dimmed());
+                let pad = 50_usize.saturating_sub(label.len());
+                eprintln!(
+                    "  {}{}{}{}",
+                    BOX_TL,
+                    BOX_H.repeat(2),
+                    label.dimmed(),
+                    BOX_H.repeat(pad.saturating_sub(2)) .to_owned() + BOX_TR
+                );
             }
             return;
         }
 
         if self.in_code_block {
-            println!("{}", line.dimmed());
+            // Code line inside block — with left border
+            eprintln!("  {} {}", BOX_V.dimmed(), line.dimmed());
+            return;
+        }
+
+        // Empty line
+        if line.is_empty() {
+            eprintln!();
             return;
         }
 
         // Headers
         if line.starts_with("### ") {
-            println!("{}", line[4..].bold());
+            eprintln!("  {}", line[4..].bold());
             return;
         }
         if line.starts_with("## ") {
-            println!("{}", line[3..].bold().underline());
+            eprintln!("  {}", line[3..].bold().underline());
             return;
         }
         if line.starts_with("# ") {
-            println!("{}", line[2..].bold().underline());
+            eprintln!("  {}", line[2..].bold().underline());
             return;
         }
 
         // Horizontal rule
-        if line.trim() == "---" || line.trim() == "***" {
-            println!("{}", "─".repeat(40).dimmed());
+        if line.trim() == "---" || line.trim() == "***" || line.trim() == "___" {
+            eprintln!("  {}", "─".repeat(50).dimmed());
             return;
         }
 
         // Bullet points
         if line.starts_with("- ") || line.starts_with("* ") {
-            print!("{} ", "•".cyan());
-            println!("{}", render_inline(&line[2..]));
+            eprintln!("  {} {}", "•".cyan(), render_inline(&line[2..]));
+            return;
+        }
+
+        // Indented bullet points
+        if line.starts_with("  - ") || line.starts_with("  * ") {
+            eprintln!("    {} {}", "◦".dimmed(), render_inline(&line[4..]));
             return;
         }
 
         // Numbered lists
-        if line.len() > 2 {
-            let first_dot = line.find(". ");
-            if let Some(pos) = first_dot {
-                if pos <= 3 && line[..pos].chars().all(|c| c.is_ascii_digit()) {
-                    let num = &line[..pos];
-                    print!("{} ", format!("{}.", num).cyan());
-                    println!("{}", render_inline(&line[pos + 2..]));
-                    return;
-                }
-            }
+        if let Some(rest) = try_numbered_list(line) {
+            eprintln!("  {}", rest);
+            return;
+        }
+
+        // Blockquote
+        if line.starts_with("> ") {
+            eprintln!("  {} {}", "▎".cyan(), render_inline(&line[2..]).dimmed());
+            return;
         }
 
         // Regular text with inline formatting
-        println!("{}", render_inline(line));
+        eprintln!("  {}", render_inline(line));
+    }
+
+    /// Flush remaining partial content (called at end of response)
+    pub fn finish(&mut self) {
+        if !self.partial.is_empty() {
+            self.erase_partial();
+            self.render_complete_line();
+            self.partial.clear();
+        }
+        // Close any unclosed code block
+        if self.in_code_block {
+            eprintln!("  {}", BOX_BL.to_string() + &BOX_H.repeat(50) + BOX_BR);
+            self.in_code_block = false;
+        }
+    }
+
+    /// Must be called after render_complete_line to update code block state
+    /// This is separate because render_complete_line borrows &self
+    pub fn update_state_after_line(&mut self, line: &str) {
+        if line.starts_with("```") {
+            self.in_code_block = !self.in_code_block;
+            if self.in_code_block {
+                self.code_lang = line[3..].trim().to_string();
+            } else {
+                self.code_lang.clear();
+            }
+        }
+    }
+
+    /// Redesigned push that properly tracks code block state
+    pub fn push_streaming(&mut self, text: &str) {
+        for ch in text.chars() {
+            if ch == '\n' {
+                self.erase_partial();
+                self.render_complete_line();
+                let line = self.partial.clone();
+                self.update_state_after_line(&line);
+                self.partial.clear();
+            } else {
+                self.partial.push(ch);
+                self.print_partial_char(ch);
+            }
+        }
     }
 }
 
+/// Try to parse a numbered list line: "1. text" -> formatted
+fn try_numbered_list(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let indent = line.len() - trimmed.len();
+    if let Some(dot_pos) = trimmed.find(". ") {
+        if dot_pos <= 3 && trimmed[..dot_pos].chars().all(|c| c.is_ascii_digit()) {
+            let num = &trimmed[..dot_pos];
+            let rest = &trimmed[dot_pos + 2..];
+            let pad = " ".repeat(indent);
+            return Some(format!(
+                "{}{} {}",
+                pad,
+                format!("{}.", num).cyan(),
+                render_inline(rest)
+            ));
+        }
+    }
+    None
+}
+
 /// Render inline markdown: **bold**, `code`, *italic*
-#[allow(dead_code)]
-fn render_inline(text: &str) -> String {
+pub fn render_inline(text: &str) -> String {
     let mut result = String::new();
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
@@ -150,20 +230,24 @@ fn render_inline(text: &str) -> String {
         if chars[i] == '`' && (i + 1 >= chars.len() || chars[i + 1] != '`') {
             if let Some(end) = chars[i + 1..].iter().position(|&c| c == '`') {
                 let inner: String = chars[i + 1..i + 1 + end].iter().collect();
-                result.push_str(&format!("{}", inner.cyan()));
+                result.push_str(&format!("{}", inner.on_bright_black().white()));
                 i = i + 1 + end + 1;
                 continue;
             }
         }
 
-        // *italic*
+        // *italic* (but not **)
         if chars[i] == '*' && (i == 0 || chars[i - 1] != '*') {
-            if i + 1 < chars.len() && chars[i + 1] != '*' {
+            if i + 1 < chars.len() && chars[i + 1] != '*' && chars[i + 1] != ' ' {
                 if let Some(end) = chars[i + 1..].iter().position(|&c| c == '*') {
-                    let inner: String = chars[i + 1..i + 1 + end].iter().collect();
-                    result.push_str(&format!("{}", inner.italic()));
-                    i = i + 1 + end + 1;
-                    continue;
+                    if i + 1 + end < chars.len()
+                        && (i + 1 + end + 1 >= chars.len() || chars[i + 1 + end + 1] != '*')
+                    {
+                        let inner: String = chars[i + 1..i + 1 + end].iter().collect();
+                        result.push_str(&format!("{}", inner.italic()));
+                        i = i + 1 + end + 1;
+                        continue;
+                    }
                 }
             }
         }
@@ -175,10 +259,12 @@ fn render_inline(text: &str) -> String {
     result
 }
 
-#[allow(dead_code)]
 fn find_closing(chars: &[char], start: usize, pattern: &str) -> Option<usize> {
     let pat: Vec<char> = pattern.chars().collect();
-    for i in start..chars.len() - pat.len() + 1 {
+    if start + pat.len() > chars.len() {
+        return None;
+    }
+    for i in start..=chars.len() - pat.len() {
         if chars[i..i + pat.len()] == pat[..] {
             return Some(i);
         }
@@ -186,7 +272,80 @@ fn find_closing(chars: &[char], start: usize, pattern: &str) -> Option<usize> {
     None
 }
 
-/// Simple spinner for API calls
+// ── Tool call display ──
+
+/// Print a tool call with a nice box
+pub fn print_tool_box(name: &str, detail: &str) {
+    let icon = match name {
+        "bash" => "⚡",
+        "read_file" | "read" => "📄",
+        "write_file" | "write" => "✏️",
+        "search_replace" | "edit" => "🔧",
+        "grep" => "🔍",
+        "glob" => "📂",
+        "list_dir" => "📁",
+        "memory_read" => "🧠",
+        "memory_write" => "🧠",
+        _ => "🔧",
+    };
+
+    let label = match name {
+        "bash" => "bash",
+        "read_file" => "read",
+        "write_file" => "write",
+        "search_replace" => "edit",
+        _ => name,
+    };
+
+    let detail_truncated: String = detail.chars().take(70).collect();
+    let content = format!("{} {} {}", icon, label.bold(), detail_truncated.dimmed());
+    let width = 76;
+
+    eprintln!(
+        "  {}{}{}",
+        BOX_TL,
+        BOX_H.repeat(width),
+        BOX_TR
+    );
+    eprintln!("  {} {:<width$}{}", BOX_V, content, BOX_V);
+    eprintln!(
+        "  {}{}{}",
+        BOX_BL,
+        BOX_H.repeat(width),
+        BOX_BR
+    );
+}
+
+/// Print a tool result summary
+pub fn print_tool_result_box(result: &str) {
+    let lines: Vec<&str> = result.lines().collect();
+    let summary = if lines.len() > 3 {
+        format!("{} ({} lines)", lines[0].chars().take(80).collect::<String>(), lines.len())
+    } else {
+        result.chars().take(100).collect()
+    };
+    eprintln!("  {} {}", "→".dimmed(), summary.dimmed());
+}
+
+/// Print a diff preview for search_replace
+pub fn print_diff_preview(search: &str, replace: &str) {
+    let search_lines: Vec<&str> = search.lines().take(3).collect();
+    let replace_lines: Vec<&str> = replace.lines().take(3).collect();
+
+    for line in &search_lines {
+        if line.len() < 100 {
+            eprintln!("    {} {}", "−".red(), line.red());
+        }
+    }
+    for line in &replace_lines {
+        if line.len() < 100 {
+            eprintln!("    {} {}", "+".green(), line.green());
+        }
+    }
+}
+
+// ── Spinner ──
+
 pub struct Spinner {
     active: bool,
     handle: Option<tokio::task::JoinHandle<()>>,
@@ -199,7 +358,7 @@ impl Spinner {
             let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let mut i = 0;
             loop {
-                eprint!("\r{} {} ", frames[i % frames.len()].cyan(), msg.dimmed());
+                eprint!("\r  {} {} ", frames[i % frames.len()].cyan(), msg.dimmed());
                 std::io::stderr().flush().ok();
                 tokio::time::sleep(std::time::Duration::from_millis(80)).await;
                 i += 1;
@@ -216,7 +375,6 @@ impl Spinner {
             if let Some(handle) = self.handle.take() {
                 handle.abort();
             }
-            // Clear the spinner line
             eprint!("\r{}\r", " ".repeat(60));
             std::io::stderr().flush().ok();
             self.active = false;
