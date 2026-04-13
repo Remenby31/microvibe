@@ -567,7 +567,7 @@ impl TuiApp {
     fn render_status(&self, f: &mut ratatui::Frame, area: Rect) {
         let p = pricing::get_pricing(&self.model);
         let cost = self.stats.estimated_cost(p.input, p.output);
-        let total = self.stats.prompt_tokens + self.stats.completion_tokens;
+        let _total = self.stats.prompt_tokens + self.stats.completion_tokens;
         let pct = if self.max_context_tokens > 0 {
             ((self.stats.prompt_tokens as f64 / self.max_context_tokens as f64) * 100.0).min(100.0)
         } else { 0.0 };
@@ -626,7 +626,7 @@ impl TuiApp {
 
         let label = self.agent_mode.label();
 
-        let cwd = std::env::current_dir()
+        let _cwd = std::env::current_dir()
             .map(|p| {
                 let s = p.display().to_string();
                 let home = dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_default();

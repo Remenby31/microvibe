@@ -5,7 +5,6 @@ use colored::Colorize;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::json;
-use std::io::Write;
 use std::time::{Duration, Instant};
 
 const MAX_RETRIES: u32 = 3;
