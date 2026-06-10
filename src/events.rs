@@ -1,13 +1,8 @@
-use crate::session::SessionStats;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 
 /// Global flag: when true, all eprintln! should be suppressed
 pub static TUI_MODE: AtomicBool = AtomicBool::new(false);
-
-pub fn is_tui_mode() -> bool {
-    TUI_MODE.load(Ordering::Relaxed)
-}
 
 pub fn set_tui_mode(v: bool) {
     TUI_MODE.store(v, Ordering::Relaxed);
@@ -34,15 +29,12 @@ pub enum TuiEvent {
     },
     /// Thinking/reasoning started
     ThinkingStart,
-    /// Thinking text delta
-    ThinkingDelta(String),
     /// Thinking done
     ThinkingDone,
     /// Token usage update
     TokenUpdate {
         prompt_tokens: u64,
         completion_tokens: u64,
-        duration_ms: u128,
     },
     /// Agent turn completed
     TurnDone,
@@ -50,15 +42,8 @@ pub enum TuiEvent {
     Error(String),
     /// Informational system message
     SystemMessage(String),
-    /// Agent is waiting for tool approval
-    ApprovalRequest {
-        tool_name: String,
-        command: String,
-    },
     /// Context was compacted
     CompactDone { old_tokens: usize, new_tokens: usize },
-    /// Stats update
-    StatsUpdate(SessionStats),
 }
 
 /// Optional event sender — when Some, events go to TUI; when None, direct print

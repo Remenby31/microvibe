@@ -300,7 +300,6 @@ impl LlmClient {
         self.emit(TuiEvent::TokenUpdate {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
-            duration_ms: start.elapsed().as_millis(),
         });
 
         let msg = Message {
@@ -492,7 +491,6 @@ impl LlmClient {
         self.emit(TuiEvent::TokenUpdate {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
-            duration_ms: start.elapsed().as_millis(),
         });
 
         let msg = Message {

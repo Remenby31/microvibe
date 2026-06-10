@@ -89,9 +89,6 @@ impl AgentMode {
         }
     }
 
-    pub fn is_auto_approve(self) -> bool {
-        matches!(self, Self::AutoApprove)
-    }
 }
 
 // ── Chat entries ──
@@ -107,7 +104,6 @@ pub enum ChatEntry {
     Error(String),
     Warning(String),
     Interrupt,
-    Approval { tool_name: String, command: String },
     Compact { old_tokens: usize, new_tokens: usize },
 }
 
@@ -117,9 +113,6 @@ pub enum KeyAction {
     Submit(String),
     Quit,
     Cancel,
-    ApprovalYes,
-    ApprovalNo,
-    ApprovalAlways,
     CopyLast,
     None,
 }
@@ -170,7 +163,6 @@ pub struct TuiApp {
     pub provider: String,
     pub stats: SessionStats,
     pub waiting: bool,
-    pub approval_pending: bool,
     pub agent_mode: AgentMode,
     input_history: Vec<String>,
     input_history_idx: Option<usize>,
@@ -196,7 +188,6 @@ impl TuiApp {
             provider: provider.to_string(),
             stats: SessionStats::default(),
             waiting: false,
-            approval_pending: false,
             agent_mode: AgentMode::Default,
             input_history: Vec::new(),
             input_history_idx: None,
@@ -253,12 +244,6 @@ impl TuiApp {
             self.entries.push(ChatEntry::Assistant(text.to_string()));
         }
         if self.at_bottom { self.scroll = u16::MAX; }
-    }
-
-    pub fn append_thinking_text(&mut self, new_text: &str) {
-        if let Some(ChatEntry::Thinking { ref mut text, .. }) = self.entries.last_mut() {
-            text.push_str(new_text);
-        }
     }
 
     pub fn finish_last_tool(&mut self, _success: bool) {
@@ -322,7 +307,6 @@ impl TuiApp {
 
     fn render_chat(&mut self, f: &mut ratatui::Frame, area: Rect) {
         let mut lines: Vec<Line> = Vec::new();
-        let mut in_code_block = false;
         let mut prev_was_tool = false;
 
         // Animated banner
@@ -378,7 +362,7 @@ impl TuiApp {
                             format!("  {} {}…{}", frame, msg, timer), style(ANSI_BRIGHT_BLACK),
                         )));
                     } else {
-                        in_code_block = false;
+                        let mut in_code_block = false;
                         for line in text.lines() {
                             if line.starts_with("```") {
                                 in_code_block = !in_code_block;
@@ -404,7 +388,6 @@ impl TuiApp {
                         }
                         if in_code_block {
                             lines.push(Line::from(Span::styled("  └─", style(ANSI_BRIGHT_BLACK))));
-                            in_code_block = false;
                         }
                     }
                 }
@@ -516,32 +499,6 @@ impl TuiApp {
                         Span::styled("Interrupted · What should microvibe do instead?", style(ANSI_YELLOW)),
                     ]));
                 }
-                ChatEntry::Approval { tool_name, command } => {
-                    lines.push(Line::from(""));
-                    lines.push(Line::from(Span::styled(
-                        format!("  ⚠ Approve {} ?", tool_name),
-                        style(ANSI_YELLOW).add_modifier(Modifier::BOLD),
-                    )));
-                    if tool_name == "bash" {
-                        lines.push(Line::from(Span::styled("  ┌─ bash ─", style(ANSI_BRIGHT_BLACK))));
-                        for cmd_line in command.lines().take(5) {
-                            lines.push(Line::from(vec![
-                                Span::styled("  │ ", style(ANSI_BRIGHT_BLACK)),
-                                Span::styled(cmd_line.to_string(), style(ANSI_DEFAULT)),
-                            ]));
-                        }
-                        lines.push(Line::from(Span::styled("  └─", style(ANSI_BRIGHT_BLACK))));
-                    } else {
-                        lines.push(Line::from(Span::styled(
-                            format!("    {}", command.chars().take(70).collect::<String>()),
-                            style(ANSI_DEFAULT),
-                        )));
-                    }
-                    lines.push(Line::from(Span::styled(
-                        "    [y] yes  [n] no  [a] always",
-                        style(ANSI_BRIGHT_BLACK),
-                    )));
-                }
                 ChatEntry::Compact { old_tokens, new_tokens } => {
                     lines.push(Line::from(Span::styled(
                         format!("  ◆ Context compacted: {} → {} tokens", old_tokens, new_tokens),
@@ -601,14 +558,9 @@ impl TuiApp {
 
     fn render_input(&self, f: &mut ratatui::Frame, area: Rect) {
         // Prompt: always orange (like Vibe's $mistral_orange)
-        let prompt_color = if self.approval_pending { ANSI_YELLOW } else { MISTRAL_ORANGE };
-        let prompt = if self.approval_pending { "?" } else { ">" };
-
-        let input_content = if self.approval_pending {
-            "[y]es / [n]o / [a]lways".to_string()
-        } else {
-            self.input.clone()
-        };
+        let prompt_color = MISTRAL_ORANGE;
+        let prompt = ">";
+        let input_content = self.input.clone();
 
         let input_line = Line::from(vec![
             Span::styled(format!("{} ", prompt), style(prompt_color).add_modifier(Modifier::BOLD)),
@@ -616,9 +568,7 @@ impl TuiApp {
         ]);
 
         // Border color from agent mode (default = gray, not green!)
-        let border_color = if self.approval_pending {
-            ANSI_YELLOW
-        } else if self.waiting {
+        let border_color = if self.waiting {
             ANSI_BRIGHT_BLACK
         } else {
             self.agent_mode.border_color()
@@ -655,7 +605,7 @@ impl TuiApp {
 
         f.render_widget(Paragraph::new(input_line).block(block), area);
 
-        if !self.waiting && !self.approval_pending {
+        if !self.waiting {
             f.set_cursor_position((area.x + self.cursor_pos as u16 + 3, area.y + 1));
         }
     }
@@ -731,15 +681,6 @@ impl TuiApp {
     pub fn handle_key(&mut self, key: KeyEvent) -> KeyAction {
         if self.modal != Modal::None { return self.handle_modal_key(key); }
 
-        if self.approval_pending {
-            return match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => KeyAction::ApprovalYes,
-                KeyCode::Char('n') | KeyCode::Char('N') => KeyAction::ApprovalNo,
-                KeyCode::Char('a') | KeyCode::Char('A') => KeyAction::ApprovalAlways,
-                KeyCode::Esc => KeyAction::ApprovalNo,
-                _ => KeyAction::None,
-            };
-        }
 
         match (key.modifiers, key.code) {
             // A1: Esc = interrupt during turn (like Vibe)

@@ -102,9 +102,8 @@ pub async fn run_tui(
                         text: String::new(), spinning: true, collapsed: false,
                     });
                 }
-                TuiEvent::ThinkingDelta(text) => app.append_thinking_text(&text),
                 TuiEvent::ThinkingDone => app.finish_thinking(),
-                TuiEvent::TokenUpdate { prompt_tokens, completion_tokens, .. } => {
+                TuiEvent::TokenUpdate { prompt_tokens, completion_tokens } => {
                     app.stats.prompt_tokens += prompt_tokens;
                     app.stats.completion_tokens += completion_tokens;
                 }
@@ -129,14 +128,9 @@ pub async fn run_tui(
                     app.set_waiting(false);
                 }
                 TuiEvent::SystemMessage(msg) => app.add_entry(ChatEntry::System(msg)),
-                TuiEvent::ApprovalRequest { tool_name, command } => {
-                    app.approval_pending = true;
-                    app.add_entry(ChatEntry::Approval { tool_name, command });
-                }
                 TuiEvent::CompactDone { old_tokens, new_tokens } => {
                     app.add_entry(ChatEntry::Compact { old_tokens, new_tokens });
                 }
-                TuiEvent::StatsUpdate(stats) => app.stats = stats,
             }
         }
 
@@ -158,10 +152,6 @@ pub async fn run_tui(
                         }
                         app.set_waiting(false);
                         app.add_entry(ChatEntry::Interrupt);
-                    }
-                    KeyAction::ApprovalYes | KeyAction::ApprovalAlways | KeyAction::ApprovalNo => {
-                        app.approval_pending = false;
-                        // TODO: send approval response back to agent via channel
                     }
                     KeyAction::Submit(input) => {
                         if input == "/quit" || input == "/q" || input == "/exit" {
