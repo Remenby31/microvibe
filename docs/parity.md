@@ -141,6 +141,7 @@ Current TUI gates:
 - `tui_ctrl_y_no_insert`, `tui_ctrl_y_draft_no_insert`: `Ctrl+Y` is consumed as Vibe's copy-selection shortcut and never inserts a literal `y`.
 - `tui_ctrl_shift_c_draft_no_clear`: `Ctrl+Shift+C` is consumed as Vibe's copy-selection shortcut and does not clear draft input like `Ctrl+C`.
 - `tui_malformed_mouse_ignored`, `tui_malformed_mouse_release_ignored`: malformed SGR mouse reports such as VS Code's `ESC[<32;NaN;NaNM` / `ESC[<35;NaN;NaNm` focus-change noise are ignored instead of leaking characters into the prompt.
+- `tui_shift_backspace_left`: prompt editing treats `Shift+Backspace` like Backspace, matching upstream ChatTextArea keybinding coverage.
 - `tui_shift_delete_right`: prompt editing deletes the character to the right of the cursor.
 - `tui_initial_prompt`: positional `PROMPT` starts the interactive TUI, submits that prompt after startup, and renders the same user/assistant transcript instead of using programmatic mode.
 - `tui_prompt_bash_allow_expand_tool`, `tui_prompt_bash_allow_expand_collapse_tool`: global `Ctrl+O` expands and re-collapses Vibe-style bash tool output sections (`▶ N lines` / `▼ show less`).
