@@ -567,6 +567,13 @@ async fn run_inner(
                     quit_confirmation = None;
                 }
                 Event::Key(key)
+                    if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y'))
+                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    // Vibe reserves Ctrl+Y for copying the current terminal selection.
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
                     if key.code == KeyCode::Char('a')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                         && bottom_panel.is_none() =>

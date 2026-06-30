@@ -138,6 +138,7 @@ Current TUI gates:
 - `tui_ctrl_c_clear_input`: `Ctrl+C` with draft input clears the prompt instead of quitting.
 - `tui_ctrl_d_nonempty_no_quit`: `Ctrl+D` with draft input matches Vibe's PTY behavior: it does not trigger quit.
 - `tui_ctrl_r_no_insert`, `tui_ctrl_r_voice_enabled_no_insert`: `Ctrl+R` is consumed as Vibe's voice-recording shortcut and never inserts a literal `r`, both with voice mode disabled and enabled.
+- `tui_ctrl_y_no_insert`, `tui_ctrl_y_draft_no_insert`: `Ctrl+Y` is consumed as Vibe's copy-selection shortcut and never inserts a literal `y`.
 - `tui_malformed_mouse_ignored`, `tui_malformed_mouse_release_ignored`: malformed SGR mouse reports such as VS Code's `ESC[<32;NaN;NaNM` / `ESC[<35;NaN;NaNm` focus-change noise are ignored instead of leaking characters into the prompt.
 - `tui_shift_delete_right`: prompt editing deletes the character to the right of the cursor.
 - `tui_initial_prompt`: positional `PROMPT` starts the interactive TUI, submits that prompt after startup, and renders the same user/assistant transcript instead of using programmatic mode.
