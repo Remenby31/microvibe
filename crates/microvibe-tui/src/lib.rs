@@ -281,6 +281,7 @@ async fn run_inner(
     let initial_session = Session::new(config.clone());
     let mut current_agent_name = config.default_agent.clone();
     let mut current_agent = display_agent_name(&current_agent_name, &agent_order);
+    let mut active_theme = current_theme_name(&config);
     let mut input = String::new();
     let mut input_cursor = 0usize;
     let mut completion: Option<CompletionSet> = None;
@@ -558,7 +559,8 @@ async fn run_inner(
                 scroll_offset = 0;
                 display_rows.join("\n")
             };
-            let body = Paragraph::new(styled_transcript_rows(&visible_transcript))
+            let palette = theme_palette(&active_theme);
+            let body = Paragraph::new(styled_transcript_rows(&visible_transcript, palette))
                 .wrap(Wrap { trim: false });
             let separator = "─".repeat(chunks[1].width as usize);
             let mode_label = current_agent.as_str();
@@ -579,7 +581,14 @@ async fn run_inner(
                 .saturating_sub(footer_left.chars().count() as u16)
                 .saturating_sub(status.len() as u16) as usize;
             let prompt_lines = match &bottom_panel {
-                Some(panel) => panel_lines(panel, chunks[1].width, footer_left, status, mode_label),
+                Some(panel) => panel_lines(
+                    panel,
+                    chunks[1].width,
+                    footer_left,
+                    status,
+                    mode_label,
+                    palette,
+                ),
                 None => input_panel_lines(
                     &mode_line,
                     &input,
@@ -588,6 +597,8 @@ async fn run_inner(
                     footer_left,
                     status,
                     gap,
+                    agent_mode_accent(&current_agent_name),
+                    palette,
                 ),
             };
             let prompt = Paragraph::new(prompt_lines);
@@ -641,6 +652,9 @@ async fn run_inner(
                         continue;
                     }
                     if let Some(panel) = bottom_panel.take() {
+                        if panel.command == "/theme" {
+                            active_theme = current_theme_name(&config);
+                        }
                         if panel.command == "/approval" {
                             deny_pending_turn(&mut running_turn);
                         } else if panel.command == "/question" {
@@ -1308,6 +1322,10 @@ async fn run_inner(
                                 }
                             }
                         } else {
+                            if let Some(theme) = selected_theme(&panel) {
+                                config.theme = Some(theme.to_string());
+                                active_theme = theme.to_string();
+                            }
                             apply_panel_selection(&mut transcript, &panel);
                         }
                         continue;
@@ -1688,6 +1706,9 @@ async fn run_inner(
                         }
                     } else if let Some(panel) = bottom_panel.as_mut() {
                         panel.select_next();
+                        if let Some(theme) = selected_theme(panel) {
+                            active_theme = theme.to_string();
+                        }
                     } else {
                         input_history_next(
                             &input_history,
@@ -1733,6 +1754,9 @@ async fn run_inner(
                         }
                     } else if let Some(panel) = bottom_panel.as_mut() {
                         panel.select_previous();
+                        if let Some(theme) = selected_theme(panel) {
+                            active_theme = theme.to_string();
+                        }
                     } else {
                         input_history_previous(
                             &input_history,
@@ -1982,6 +2006,87 @@ const VIBE_ORANGE: Color = Color::Rgb(255, 130, 5);
 const VIBE_FOREGROUND: Color = Color::Rgb(197, 200, 198);
 const VIBE_SECONDARY: Color = Color::Rgb(104, 160, 179);
 const VIBE_MUTED: Color = Color::Rgb(134, 136, 135);
+const VIBE_SUCCESS: Color = Color::Rgb(63, 185, 80);
+const VIBE_WARNING: Color = Color::Rgb(255, 193, 7);
+const VIBE_ERROR: Color = Color::Rgb(255, 92, 92);
+
+#[derive(Clone, Copy)]
+struct ThemePalette {
+    foreground: Color,
+    secondary: Color,
+    muted: Color,
+}
+
+fn current_theme_name(config: &Config) -> String {
+    config
+        .theme
+        .clone()
+        .filter(|theme| sorted_theme_names().contains(theme))
+        .unwrap_or_else(|| "ansi-dark".to_string())
+}
+
+fn theme_palette(theme: &str) -> ThemePalette {
+    if is_light_theme(theme) {
+        ThemePalette {
+            foreground: Color::Rgb(45, 45, 45),
+            secondary: Color::Rgb(31, 109, 137),
+            muted: Color::Rgb(105, 105, 105),
+        }
+    } else {
+        ThemePalette {
+            foreground: VIBE_FOREGROUND,
+            secondary: VIBE_SECONDARY,
+            muted: VIBE_MUTED,
+        }
+    }
+}
+
+fn is_light_theme(theme: &str) -> bool {
+    matches!(
+        theme,
+        "ansi-light"
+            | "atom-one-light"
+            | "catppuccin-latte"
+            | "rose-pine-dawn"
+            | "solarized-light"
+            | "textual-light"
+    )
+}
+
+fn sorted_theme_names() -> Vec<String> {
+    [
+        "ansi-light",
+        "atom-one-light",
+        "catppuccin-latte",
+        "rose-pine-dawn",
+        "solarized-light",
+        "textual-light",
+        "ansi-dark",
+        "atom-one-dark",
+        "catppuccin-frappe",
+        "catppuccin-macchiato",
+        "catppuccin-mocha",
+        "dracula",
+        "flexoki",
+        "gruvbox",
+        "monokai",
+        "nord",
+        "rose-pine",
+        "rose-pine-moon",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn agent_mode_accent(agent: &str) -> Color {
+    match agent {
+        "plan" => VIBE_SUCCESS,
+        "accept-edits" => VIBE_WARNING,
+        "auto-approve" => VIBE_ERROR,
+        _ => VIBE_MUTED,
+    }
+}
 
 fn input_panel_height(completion: Option<&CompletionSet>, input: &str, panel_width: u16) -> u16 {
     let visible = completion
@@ -2004,6 +2109,8 @@ fn input_panel_lines<'a>(
     footer_left: String,
     status: &'a str,
     gap: usize,
+    mode_accent: Color,
+    palette: ThemePalette,
 ) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
     let width = separator.chars().count();
@@ -2053,7 +2160,7 @@ fn input_panel_lines<'a>(
     }
     lines.push(Line::styled(
         mode_line.to_string(),
-        Style::default().fg(VIBE_MUTED),
+        Style::default().fg(mode_accent),
     ));
     let wrapped_input = wrap_input_for_display(input, width);
     let single_visual_input_line = wrapped_input.len() == 1;
@@ -2066,12 +2173,12 @@ fn input_panel_lines<'a>(
                         .fg(VIBE_ORANGE)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(line, Style::default().fg(VIBE_FOREGROUND)),
+                Span::styled(line, Style::default().fg(palette.foreground)),
             ]));
         } else {
             lines.push(Line::styled(
                 format!("  {line}"),
-                Style::default().fg(VIBE_FOREGROUND),
+                Style::default().fg(palette.foreground),
             ));
         }
     }
@@ -2081,12 +2188,12 @@ fn input_panel_lines<'a>(
     }
     lines.push(Line::styled(
         separator.to_string(),
-        Style::default().fg(VIBE_MUTED),
+        Style::default().fg(mode_accent),
     ));
     lines.push(Line::from(vec![
-        Span::styled(footer_left, Style::default().fg(VIBE_MUTED)),
+        Span::styled(footer_left, Style::default().fg(palette.muted)),
         Span::raw(" ".repeat(gap)),
-        Span::styled(status.to_string(), Style::default().fg(VIBE_MUTED)),
+        Span::styled(status.to_string(), Style::default().fg(palette.muted)),
     ]));
     lines
 }
@@ -2151,21 +2258,23 @@ fn byte_index_after_chars(input: &str, count: usize) -> usize {
         .unwrap_or(input.len())
 }
 
-fn styled_transcript_rows(text: &str) -> Vec<Line<'static>> {
-    text.lines().map(styled_transcript_row).collect()
+fn styled_transcript_rows(text: &str, palette: ThemePalette) -> Vec<Line<'static>> {
+    text.lines()
+        .map(|row| styled_transcript_row(row, palette))
+        .collect()
 }
 
-fn styled_transcript_row(row: &str) -> Line<'static> {
+fn styled_transcript_row(row: &str, palette: ThemePalette) -> Line<'static> {
     if row.starts_with("Mistral Vibe") {
-        return styled_banner_title_row(row);
+        return styled_banner_title_row(row, palette);
     }
     if row == "Type /help for more information" {
         return Line::from(vec![
-            Span::styled("Type ".to_string(), Style::default().fg(VIBE_FOREGROUND)),
-            Span::styled("/help".to_string(), Style::default().fg(VIBE_SECONDARY)),
+            Span::styled("Type ".to_string(), Style::default().fg(palette.foreground)),
+            Span::styled("/help".to_string(), Style::default().fg(palette.secondary)),
             Span::styled(
                 " for more information".to_string(),
-                Style::default().fg(VIBE_FOREGROUND),
+                Style::default().fg(palette.foreground),
             ),
         ]);
     }
@@ -2177,25 +2286,25 @@ fn styled_transcript_row(row: &str) -> Line<'static> {
                     .fg(VIBE_ORANGE)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(prompt.to_string(), Style::default().fg(VIBE_FOREGROUND)),
+            Span::styled(prompt.to_string(), Style::default().fg(palette.foreground)),
         ]);
     }
 
     let style = if row.chars().any(is_braille_char) {
-        Style::default().fg(VIBE_FOREGROUND)
+        Style::default().fg(palette.foreground)
     } else if row.starts_with('─') || row.starts_with("  ⎣") {
-        Style::default().fg(VIBE_MUTED)
+        Style::default().fg(palette.muted)
     } else if row.contains("Initializing") || row.contains("Running ") {
         Style::default().fg(VIBE_ORANGE)
     } else if row.contains("Error") || row.contains("error:") {
         Style::default().fg(Color::Red)
     } else {
-        Style::default().fg(VIBE_FOREGROUND)
+        Style::default().fg(palette.foreground)
     };
     Line::styled(row.to_string(), style)
 }
 
-fn styled_banner_title_row(row: &str) -> Line<'static> {
+fn styled_banner_title_row(row: &str, palette: ThemePalette) -> Line<'static> {
     let Some((prefix, model)) = row.split_once(" · ") else {
         return Line::styled(
             row.to_string(),
@@ -2205,7 +2314,7 @@ fn styled_banner_title_row(row: &str) -> Line<'static> {
         );
     };
     let Some(version) = prefix.strip_prefix("Mistral Vibe ") else {
-        return Line::styled(row.to_string(), Style::default().fg(VIBE_FOREGROUND));
+        return Line::styled(row.to_string(), Style::default().fg(palette.foreground));
     };
     Line::from(vec![
         Span::styled(
@@ -2216,9 +2325,9 @@ fn styled_banner_title_row(row: &str) -> Line<'static> {
         ),
         Span::styled(
             format!(" {version} · "),
-            Style::default().fg(VIBE_FOREGROUND),
+            Style::default().fg(palette.foreground),
         ),
-        Span::styled(model.to_string(), Style::default().fg(VIBE_SECONDARY)),
+        Span::styled(model.to_string(), Style::default().fg(palette.secondary)),
     ])
 }
 
@@ -2864,46 +2973,35 @@ fn bottom_panel_for_command(
             proxy_values: Vec::new(),
             mounted_at: Instant::now(),
         }),
-        "/theme" => Some(BottomPanel {
-            command: "/theme".to_string(),
-            title: "Select Theme".to_string(),
-            options: strings(&[
-                "ansi-light",
-                "atom-one-light",
-                "catppuccin-latte",
-                "rose-pine-dawn",
-                "solarized-light",
-                "textual-light",
-                "ansi-dark",
-                "atom-one-dark",
-                "catppuccin-frappe",
-                "catppuccin-macchiato",
-                "catppuccin-mocha",
-                "dracula",
-                "flexoki",
-                "gruvbox",
-                "monokai",
-                "nord",
-                "rose-pine",
-                "rose-pine-moon",
-            ]),
-            selected: 6,
-            help: "↑↓ Preview  Enter Select  Esc Cancel".to_string(),
-            scroll_marker: Some(15),
-            raw_rows: None,
-            toggled: false,
-            auto_copy_on: false,
-            resume_sessions: Vec::new(),
-            delete_confirm: None,
-            rewind_message_index: None,
-            question_call: None,
-            question_index: 0,
-            question_answers: Vec::new(),
-            question_selected_options: Vec::new(),
-            question_other_texts: Vec::new(),
-            proxy_values: Vec::new(),
-            mounted_at: Instant::now(),
-        }),
+        "/theme" => {
+            let options = sorted_theme_names();
+            let current = current_theme_name(config);
+            let selected = options
+                .iter()
+                .position(|theme| theme == &current)
+                .unwrap_or(6);
+            Some(BottomPanel {
+                command: "/theme".to_string(),
+                title: "Select Theme".to_string(),
+                options,
+                selected,
+                help: "↑↓ Preview  Enter Select  Esc Cancel".to_string(),
+                scroll_marker: Some(15),
+                raw_rows: None,
+                toggled: false,
+                auto_copy_on: false,
+                resume_sessions: Vec::new(),
+                delete_confirm: None,
+                rewind_message_index: None,
+                question_call: None,
+                question_index: 0,
+                question_answers: Vec::new(),
+                question_selected_options: Vec::new(),
+                question_other_texts: Vec::new(),
+                proxy_values: Vec::new(),
+                mounted_at: Instant::now(),
+            })
+        }
         "/config" => Some(BottomPanel {
             command: "/config".to_string(),
             title: "Settings".to_string(),
@@ -3587,6 +3685,14 @@ fn apply_panel_selection(transcript: &mut Vec<String>, panel: &BottomPanel) {
     }
 }
 
+fn selected_theme(panel: &BottomPanel) -> Option<&str> {
+    if panel.command == "/theme" {
+        panel.options.get(panel.selected).map(String::as_str)
+    } else {
+        None
+    }
+}
+
 fn apply_panel_exit(transcript: &mut Vec<String>, panel: &BottomPanel) {
     match panel.command.as_str() {
         "/config" => {
@@ -3650,6 +3756,7 @@ fn panel_lines(
     cwd: String,
     status: &str,
     mode_label: &str,
+    palette: ThemePalette,
 ) -> Vec<Line<'static>> {
     let width = width as usize;
     let inner = width.saturating_sub(2);
@@ -3784,21 +3891,21 @@ fn panel_lines(
         .enumerate()
         .map(|(idx, row)| {
             let style = if idx == 0 || row.starts_with('└') {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(palette.muted)
             } else if idx == 1 {
                 Style::default()
-                    .fg(Color::White)
+                    .fg(palette.foreground)
                     .add_modifier(Modifier::BOLD)
             } else if row.contains('›') {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(palette.secondary)
                     .add_modifier(Modifier::BOLD)
             } else if row.contains("Error") {
                 Style::default().fg(Color::Red)
             } else if idx + 1 == row_count {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(palette.muted)
             } else {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(palette.foreground)
             };
             Line::styled(row, style)
         })

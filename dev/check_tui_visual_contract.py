@@ -18,6 +18,7 @@ from parity import CSI_RE, Screen
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RAW = ROOT / "target" / "parity" / "default_tui_startup.microvibe.raw"
+MODE_RAW = ROOT / "target" / "parity" / "tui_cycle_mode_shift_tab.microvibe.raw"
 
 
 EXPECTED_RGB = {
@@ -26,11 +27,17 @@ EXPECTED_RGB = {
     "secondary": b"\x1b[38;2;104;160;179;49m",
     "muted": b"\x1b[38;2;134;136;135;49m",
 }
+MODE_SAFE_RGB = b"\x1b[38;2;63;185;80;49m"
 
 
 def ensure_startup_raw() -> bytes:
     subprocess.run(["dev/parity.py", "--case", "default_tui_startup"], cwd=ROOT, check=True)
     return RAW.read_bytes()
+
+
+def ensure_mode_raw() -> bytes:
+    subprocess.run(["dev/parity.py", "--case", "tui_cycle_mode_shift_tab"], cwd=ROOT, check=True)
+    return MODE_RAW.read_bytes()
 
 
 def require(name: str, condition: bool) -> None:
@@ -84,6 +91,7 @@ def petit_chat_frames(raw: bytes, rows: int = 36, cols: int = 120) -> list[str]:
 
 def main() -> int:
     raw = ensure_startup_raw()
+    mode_raw = ensure_mode_raw()
     require("modifyOtherKeys is not disabled before keyboard setup", b"\x1b[>4;0m" in raw)
     require("keyboard enhancement flags do not match Codex's Kitty contract", b"\x1b[>7u" in raw)
     require("prompt cursor is not explicitly visible", b"\x1b[?25h" in raw)
@@ -99,6 +107,7 @@ def main() -> int:
 
     frames = petit_chat_frames(raw)
     require("petit chat banner does not animate", len(frames) >= 3)
+    require("agent mode border does not change color", MODE_SAFE_RGB in mode_raw)
 
     print("TUI visual contract OK")
     return 0
