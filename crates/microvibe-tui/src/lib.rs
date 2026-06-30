@@ -8,7 +8,7 @@ use autocomplete::{
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, ModifierKeyCode,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
@@ -70,7 +70,32 @@ pub async fn run_with_initial_prompt(config: Config, initial_prompt: Option<Stri
 
 fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+}
+
+fn modifier_key_modifier(code: &KeyCode) -> Option<KeyModifiers> {
+    match code {
+        KeyCode::Modifier(ModifierKeyCode::LeftControl | ModifierKeyCode::RightControl) => {
+            Some(KeyModifiers::CONTROL)
+        }
+        KeyCode::Modifier(ModifierKeyCode::LeftAlt | ModifierKeyCode::RightAlt) => {
+            Some(KeyModifiers::ALT)
+        }
+        KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift) => {
+            Some(KeyModifiers::SHIFT)
+        }
+        KeyCode::Modifier(ModifierKeyCode::LeftSuper | ModifierKeyCode::RightSuper) => {
+            Some(KeyModifiers::SUPER)
+        }
+        KeyCode::Modifier(ModifierKeyCode::LeftHyper | ModifierKeyCode::RightHyper) => {
+            Some(KeyModifiers::HYPER)
+        }
+        KeyCode::Modifier(ModifierKeyCode::LeftMeta | ModifierKeyCode::RightMeta) => {
+            Some(KeyModifiers::META)
+        }
+        _ => None,
+    }
 }
 
 async fn run_inner(
@@ -130,6 +155,7 @@ async fn run_inner(
     let mut current_assistant_text = String::new();
     let mut last_assistant_text: Option<String> = None;
     let mut scheduled_loops: Vec<ScheduledLoop> = Vec::new();
+    let mut active_key_modifiers = KeyModifiers::empty();
 
     if let Some(submitted) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
         add_input_history(&mut input_history, &submitted);
@@ -354,11 +380,22 @@ async fn run_inner(
         frame_tick = frame_tick.wrapping_add(1);
 
         if event::poll(Duration::from_millis(50))? {
-            let event = event::read()?;
-            if let Event::Key(key) = &event
-                && key.kind == KeyEventKind::Release
-            {
-                continue;
+            let mut event = event::read()?;
+            if let Event::Key(mut key) = event {
+                if let Some(modifier) = modifier_key_modifier(&key.code) {
+                    match key.kind {
+                        KeyEventKind::Press | KeyEventKind::Repeat => {
+                            active_key_modifiers.insert(modifier);
+                        }
+                        KeyEventKind::Release => active_key_modifiers.remove(modifier),
+                    }
+                    continue;
+                }
+                if key.kind == KeyEventKind::Release {
+                    continue;
+                }
+                key.modifiers |= active_key_modifiers;
+                event = Event::Key(key);
             }
             match event {
                 Event::Key(key) if key.code == KeyCode::Esc => {
@@ -538,6 +575,142 @@ async fn run_inner(
                         && bottom_panel.is_none() =>
                 {
                     input_cursor = input.len();
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if matches!(key.code, KeyCode::Char('b') | KeyCode::Char('B'))
+                        && key.modifiers.contains(KeyModifiers::ALT)
+                        && bottom_panel.is_none() =>
+                {
+                    input_cursor = previous_word_boundary(&input, input_cursor);
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if matches!(key.code, KeyCode::Char('f') | KeyCode::Char('F'))
+                        && key.modifiers.contains(KeyModifiers::ALT)
+                        && bottom_panel.is_none() =>
+                {
+                    input_cursor = next_word_boundary(&input, input_cursor);
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if matches!(key.code, KeyCode::Char('b') | KeyCode::Char('B'))
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                        && bottom_panel.is_none() =>
+                {
+                    input_cursor = previous_input_boundary(&input, input_cursor);
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if matches!(key.code, KeyCode::Char('f') | KeyCode::Char('F'))
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                        && bottom_panel.is_none() =>
+                {
+                    input_cursor = next_input_boundary(&input, input_cursor);
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if matches!(key.code, KeyCode::Char('d') | KeyCode::Char('D'))
+                        && key.modifiers.contains(KeyModifiers::ALT)
+                        && bottom_panel.is_none() =>
+                {
+                    delete_word_right(&mut input, &mut input_cursor);
+                    reset_input_history_navigation(
+                        &mut input_history_index,
+                        &mut input_history_draft,
+                    );
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if matches!(key.code, KeyCode::Char('w') | KeyCode::Char('W'))
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                        && bottom_panel.is_none() =>
+                {
+                    delete_word_left(&mut input, &mut input_cursor);
+                    reset_input_history_navigation(
+                        &mut input_history_index,
+                        &mut input_history_draft,
+                    );
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if key.code == KeyCode::Char('u')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                        && bottom_panel.is_none() =>
+                {
+                    delete_to_line_start(&mut input, &mut input_cursor);
+                    reset_input_history_navigation(
+                        &mut input_history_index,
+                        &mut input_history_draft,
+                    );
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if key.code == KeyCode::Char('k')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                        && bottom_panel.is_none() =>
+                {
+                    delete_to_line_end(&mut input, &mut input_cursor);
+                    reset_input_history_navigation(
+                        &mut input_history_index,
+                        &mut input_history_draft,
+                    );
                     completion = refresh_completion(
                         true,
                         &input,
@@ -1107,7 +1280,17 @@ async fn run_inner(
                             continue;
                         }
                     }
-                    backspace_input(&mut input, &mut input_cursor);
+                    if bottom_panel.is_none() && key.modifiers.contains(KeyModifiers::SUPER) {
+                        delete_to_line_start(&mut input, &mut input_cursor);
+                    } else if bottom_panel.is_none()
+                        && key
+                            .modifiers
+                            .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
+                    {
+                        delete_word_left(&mut input, &mut input_cursor);
+                    } else {
+                        backspace_input(&mut input, &mut input_cursor);
+                    }
                     reset_input_history_navigation(
                         &mut input_history_index,
                         &mut input_history_draft,
@@ -1121,7 +1304,16 @@ async fn run_inner(
                     );
                 }
                 Event::Key(key) if key.code == KeyCode::Delete && bottom_panel.is_none() => {
-                    delete_input_right(&mut input, &mut input_cursor);
+                    if key.modifiers.contains(KeyModifiers::SUPER) {
+                        delete_to_line_end(&mut input, &mut input_cursor);
+                    } else if key
+                        .modifiers
+                        .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
+                    {
+                        delete_word_right(&mut input, &mut input_cursor);
+                    } else {
+                        delete_input_right(&mut input, &mut input_cursor);
+                    }
                     reset_input_history_navigation(
                         &mut input_history_index,
                         &mut input_history_draft,
@@ -4433,6 +4625,76 @@ fn delete_input_right(input: &mut String, cursor: &mut usize) {
     input.drain(*cursor..next);
 }
 
+fn delete_to_line_start(input: &mut String, cursor: &mut usize) {
+    if input.is_empty() || *cursor == 0 {
+        return;
+    }
+    *cursor = (*cursor).min(input.len());
+    if !input.is_char_boundary(*cursor) {
+        *cursor = previous_input_boundary(input, *cursor);
+    }
+    let start = current_line_start(input, *cursor);
+    input.drain(start..*cursor);
+    *cursor = start;
+}
+
+fn delete_to_line_end(input: &mut String, cursor: &mut usize) {
+    if input.is_empty() {
+        *cursor = 0;
+        return;
+    }
+    *cursor = (*cursor).min(input.len());
+    if !input.is_char_boundary(*cursor) {
+        *cursor = previous_input_boundary(input, *cursor);
+    }
+    let end = current_line_end(input, *cursor);
+    input.drain(*cursor..end);
+}
+
+fn delete_word_left(input: &mut String, cursor: &mut usize) {
+    if input.is_empty() || *cursor == 0 {
+        return;
+    }
+    *cursor = (*cursor).min(input.len());
+    if !input.is_char_boundary(*cursor) {
+        *cursor = previous_input_boundary(input, *cursor);
+    }
+    let start = previous_word_boundary(input, *cursor);
+    input.drain(start..*cursor);
+    *cursor = start;
+}
+
+fn delete_word_right(input: &mut String, cursor: &mut usize) {
+    if input.is_empty() {
+        *cursor = 0;
+        return;
+    }
+    *cursor = (*cursor).min(input.len());
+    if *cursor >= input.len() {
+        return;
+    }
+    if !input.is_char_boundary(*cursor) {
+        *cursor = previous_input_boundary(input, *cursor);
+    }
+    let end = next_word_boundary(input, *cursor);
+    input.drain(*cursor..end);
+}
+
+fn current_line_start(input: &str, cursor: usize) -> usize {
+    input[..cursor.min(input.len())]
+        .rfind('\n')
+        .map(|index| index + '\n'.len_utf8())
+        .unwrap_or(0)
+}
+
+fn current_line_end(input: &str, cursor: usize) -> usize {
+    let cursor = cursor.min(input.len());
+    input[cursor..]
+        .find('\n')
+        .map(|offset| cursor + offset)
+        .unwrap_or(input.len())
+}
+
 fn previous_input_boundary(input: &str, cursor: usize) -> usize {
     let cursor = cursor.min(input.len());
     let mut previous = 0;
@@ -5597,6 +5859,32 @@ mod tests {
             "alpha  beta".len()
         );
         assert_eq!(next_word_boundary(input, "alpha  beta".len()), input.len());
+    }
+
+    #[test]
+    fn prompt_line_editing_shortcuts_are_utf8_and_multiline_safe() {
+        let mut input = "first line\nalpha  béta gamma\nlast".to_string();
+        let mut cursor = "first line\nalpha  béta".len();
+
+        delete_word_left(&mut input, &mut cursor);
+        assert_eq!(input, "first line\nalpha   gamma\nlast");
+        assert_eq!(cursor, "first line\nalpha  ".len());
+
+        delete_to_line_start(&mut input, &mut cursor);
+        assert_eq!(input, "first line\n gamma\nlast");
+        assert_eq!(cursor, "first line\n".len());
+
+        delete_word_right(&mut input, &mut cursor);
+        assert_eq!(input, "first line\n\nlast");
+        assert_eq!(cursor, "first line\n".len());
+
+        delete_to_line_end(&mut input, &mut cursor);
+        assert_eq!(input, "first line\n\nlast");
+
+        cursor = input.len();
+        delete_to_line_start(&mut input, &mut cursor);
+        assert_eq!(input, "first line\n\n");
+        assert_eq!(cursor, "first line\n\n".len());
     }
 
     #[test]
