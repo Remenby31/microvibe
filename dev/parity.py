@@ -116,6 +116,7 @@ CASES: dict[str, Case] = {
     "acp_prompt_image_wrong_type": Case("acp_prompt_image_wrong_type", "acp_prompt_image_wrong_type", b"", settle=0.0, timeout=10.0),
     "acp_prompt_image_invalid_base64": Case("acp_prompt_image_invalid_base64", "acp_prompt_image_invalid_base64", b"", settle=0.0, timeout=10.0),
     "acp_prompt_image_too_many": Case("acp_prompt_image_too_many", "acp_prompt_image_too_many", b"", settle=0.0, timeout=10.0),
+    "acp_prompt_image_too_large": Case("acp_prompt_image_too_large", "acp_prompt_image_too_large", b"", settle=0.0, timeout=20.0),
     "acp_command_help": Case("acp_command_help", "acp_command_help", b"", settle=0.0, timeout=20.0),
     "acp_command_reload": Case("acp_command_reload", "acp_command_reload", b"", settle=0.0, timeout=20.0),
     "acp_command_compact_empty": Case("acp_command_compact_empty", "acp_command_compact_empty", b"", settle=0.0, timeout=20.0),
@@ -823,6 +824,7 @@ SMOKE_CASES = [
     "acp_prompt_image_wrong_type",
     "acp_prompt_image_invalid_base64",
     "acp_prompt_image_too_many",
+    "acp_prompt_image_too_large",
     "acp_command_help",
     "acp_command_reload",
     "acp_command_compact_empty",
@@ -4769,15 +4771,21 @@ def acp_prompt_image_request(
     session_id: str,
     *,
     data: str | None = None,
+    raw_data: bytes | None = None,
     mime_type: str = "image/png",
     request_id: int | str = 3,
     image_count: int = 1,
 ) -> dict:
     png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    encoded = (
+        data
+        if data is not None
+        else base64.b64encode(raw_data if raw_data is not None else png_bytes).decode("ascii")
+    )
     image_blocks = [
         {
             "type": "image",
-            "data": data if data is not None else base64.b64encode(png_bytes).decode("ascii"),
+            "data": encoded,
             "mime_type": mime_type,
             "uri": f"file:///workspace/cat_{idx}.png" if image_count > 1 else "file:///workspace/cat.png",
         }
@@ -6018,6 +6026,19 @@ def run_acp_prompt_image_too_many(binary: list[str], env: dict[str, str], cwd: p
         cwd,
         workspace,
         lambda session_id: acp_prompt_image_request(session_id, image_count=9),
+    )
+
+
+def run_acp_prompt_image_too_large(binary: list[str], env: dict[str, str], cwd: pathlib.Path, workspace: pathlib.Path) -> bytes:
+    return run_acp_prompt_request(
+        binary,
+        env,
+        cwd,
+        workspace,
+        lambda session_id: acp_prompt_image_request(
+            session_id,
+            raw_data=b"x" * (10 * 1024 * 1024 + 1),
+        ),
     )
 
 
@@ -8651,7 +8672,7 @@ def main() -> int:
                 "acp_set_config_empty_id",
             }:
                 write_session_configs(tmp_path, 9, extra_model=True)
-            if case.mode in {"acp_prompt_simple", "acp_prompt_client_message_id", "acp_prompt_agent_thought", "acp_prompt_usage_accumulates", "acp_prompt_usage_cost", "acp_prompt_image", "acp_prompt_image_wrong_type", "acp_prompt_image_invalid_base64", "acp_prompt_image_too_many", "acp_command_help", "acp_command_reload", "acp_command_compact_empty", "acp_command_compact_one", "acp_command_teleport_no_history", "acp_command_data_retention", "acp_command_proxy_help", "acp_command_proxy_set", "acp_command_proxy_unset", "acp_command_proxy_invalid", "acp_command_proxy_case", "acp_prompt_grep", "acp_permission_grep_allow", "acp_permission_grep_deny", "acp_permission_grep_cancelled", "acp_permission_grep_allow_always", "acp_permission_grep_allow_always_permanent", "acp_permission_bash_granular", "acp_permission_bash_granular_allow_always_permanent", "acp_fs_read", "acp_fs_read_range", "acp_fs_write", "acp_fs_edit", "acp_terminal_bash_allow", "acp_terminal_bash_nonzero", "acp_terminal_bash_none_exit", "acp_terminal_bash_timeout", "acp_tool_meta_web_fetch", "acp_tool_meta_web_search", "acp_tool_meta_skill", "acp_tool_meta_task", "acp_prompt_todo", "acp_prompt_todo_invalid", "acp_fork_from_prompt_message", "acp_user_display_content"}:
+            if case.mode in {"acp_prompt_simple", "acp_prompt_client_message_id", "acp_prompt_agent_thought", "acp_prompt_usage_accumulates", "acp_prompt_usage_cost", "acp_prompt_image", "acp_prompt_image_wrong_type", "acp_prompt_image_invalid_base64", "acp_prompt_image_too_many", "acp_prompt_image_too_large", "acp_command_help", "acp_command_reload", "acp_command_compact_empty", "acp_command_compact_one", "acp_command_teleport_no_history", "acp_command_data_retention", "acp_command_proxy_help", "acp_command_proxy_set", "acp_command_proxy_unset", "acp_command_proxy_invalid", "acp_command_proxy_case", "acp_prompt_grep", "acp_permission_grep_allow", "acp_permission_grep_deny", "acp_permission_grep_cancelled", "acp_permission_grep_allow_always", "acp_permission_grep_allow_always_permanent", "acp_permission_bash_granular", "acp_permission_bash_granular_allow_always_permanent", "acp_fs_read", "acp_fs_read_range", "acp_fs_write", "acp_fs_edit", "acp_terminal_bash_allow", "acp_terminal_bash_nonzero", "acp_terminal_bash_none_exit", "acp_terminal_bash_timeout", "acp_tool_meta_web_fetch", "acp_tool_meta_web_search", "acp_tool_meta_skill", "acp_tool_meta_task", "acp_prompt_todo", "acp_prompt_todo_invalid", "acp_fork_from_prompt_message", "acp_user_display_content"}:
                 with ThreadingTCPServer(("127.0.0.1", 0), FakeChatHandler) as server:
                     port = int(server.server_address[1])
                     vibe_env["VIBE_PARITY_MISTRAL_SERVER_URL"] = f"http://127.0.0.1:{port}"
@@ -9253,6 +9274,8 @@ def main() -> int:
                         vibe_raw = run_acp_prompt_image_invalid_base64(vibe_acp, vibe_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_image_too_many":
                         vibe_raw = run_acp_prompt_image_too_many(vibe_acp, vibe_env, ROOT, workspace)
+                    elif case.mode == "acp_prompt_image_too_large":
+                        vibe_raw = run_acp_prompt_image_too_large(vibe_acp, vibe_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_client_message_id":
                         vibe_raw = run_acp_prompt_client_message_id(vibe_acp, vibe_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_agent_thought":
@@ -9364,6 +9387,8 @@ def main() -> int:
                         micro_raw = run_acp_prompt_image_invalid_base64(microvibe_acp, micro_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_image_too_many":
                         micro_raw = run_acp_prompt_image_too_many(microvibe_acp, micro_env, ROOT, workspace)
+                    elif case.mode == "acp_prompt_image_too_large":
+                        micro_raw = run_acp_prompt_image_too_large(microvibe_acp, micro_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_client_message_id":
                         micro_raw = run_acp_prompt_client_message_id(microvibe_acp, micro_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_agent_thought":
@@ -9452,7 +9477,7 @@ def main() -> int:
             if case.mode == "acp_delete_loaded_saved":
                 seed_acp_single_saved_session(pathlib.Path(vibe_env["VIBE_HOME"]), "loaddelete-12345678", workspace)
                 seed_acp_single_saved_session(pathlib.Path(micro_env["VIBE_HOME"]), "loaddelete-12345678", workspace)
-            if case.mode in {"acp_prompt_simple", "acp_prompt_client_message_id", "acp_prompt_agent_thought", "acp_prompt_usage_accumulates", "acp_prompt_usage_cost", "acp_prompt_image", "acp_prompt_image_wrong_type", "acp_prompt_image_invalid_base64", "acp_prompt_image_too_many", "acp_command_help", "acp_command_reload", "acp_command_compact_empty", "acp_command_compact_one", "acp_command_teleport_no_history", "acp_command_data_retention", "acp_command_proxy_help", "acp_command_proxy_set", "acp_command_proxy_unset", "acp_command_proxy_invalid", "acp_command_proxy_case", "acp_prompt_grep", "acp_permission_grep_allow", "acp_permission_grep_deny", "acp_permission_grep_cancelled", "acp_permission_grep_allow_always", "acp_permission_grep_allow_always_permanent", "acp_permission_bash_granular", "acp_permission_bash_granular_allow_always_permanent", "acp_fs_read", "acp_fs_read_range", "acp_fs_write", "acp_fs_edit", "acp_terminal_bash_allow", "acp_terminal_bash_nonzero", "acp_terminal_bash_none_exit", "acp_terminal_bash_timeout", "acp_tool_meta_web_fetch", "acp_tool_meta_web_search", "acp_tool_meta_skill", "acp_tool_meta_task", "acp_prompt_todo", "acp_prompt_todo_invalid", "acp_fork_from_prompt_message", "acp_user_display_content", "acp_authenticate_browser_complete", "acp_authenticate_browser_unsupported_action", "acp_initialize_delegated_browser_auth", "acp_authenticate_delegated_start", "acp_authenticate_delegated_complete", "acp_authenticate_delegated_missing_attempt", "acp_authenticate_delegated_unknown_attempt", "acp_authenticate_delegated_unsupported_action"}:
+            if case.mode in {"acp_prompt_simple", "acp_prompt_client_message_id", "acp_prompt_agent_thought", "acp_prompt_usage_accumulates", "acp_prompt_usage_cost", "acp_prompt_image", "acp_prompt_image_wrong_type", "acp_prompt_image_invalid_base64", "acp_prompt_image_too_many", "acp_prompt_image_too_large", "acp_command_help", "acp_command_reload", "acp_command_compact_empty", "acp_command_compact_one", "acp_command_teleport_no_history", "acp_command_data_retention", "acp_command_proxy_help", "acp_command_proxy_set", "acp_command_proxy_unset", "acp_command_proxy_invalid", "acp_command_proxy_case", "acp_prompt_grep", "acp_permission_grep_allow", "acp_permission_grep_deny", "acp_permission_grep_cancelled", "acp_permission_grep_allow_always", "acp_permission_grep_allow_always_permanent", "acp_permission_bash_granular", "acp_permission_bash_granular_allow_always_permanent", "acp_fs_read", "acp_fs_read_range", "acp_fs_write", "acp_fs_edit", "acp_terminal_bash_allow", "acp_terminal_bash_nonzero", "acp_terminal_bash_none_exit", "acp_terminal_bash_timeout", "acp_tool_meta_web_fetch", "acp_tool_meta_web_search", "acp_tool_meta_skill", "acp_tool_meta_task", "acp_prompt_todo", "acp_prompt_todo_invalid", "acp_fork_from_prompt_message", "acp_user_display_content", "acp_authenticate_browser_complete", "acp_authenticate_browser_unsupported_action", "acp_initialize_delegated_browser_auth", "acp_authenticate_delegated_start", "acp_authenticate_delegated_complete", "acp_authenticate_delegated_missing_attempt", "acp_authenticate_delegated_unknown_attempt", "acp_authenticate_delegated_unsupported_action"}:
                 pass
             elif case.mode == "acp_initialize":
                 vibe_env.pop("MISTRAL_API_KEY", None)
