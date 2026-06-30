@@ -156,7 +156,7 @@ Current TUI gates:
 - `tui_prompt_at_folder`: TUI `@path` mentions for folders keep the raw visible user prompt while sending Vibe's model-facing resource link.
 - `tui_prompt_at_image`: TUI `@path` mentions for images keep the raw visible user prompt, render Vibe's attached-image footer, snapshot the image, and send native `image_url` multimodal content to the model.
 - `tui_prompt_at_image_no_vision`: TUI image mentions against a non-vision model render Vibe's clear model-support error and do not send a model request.
-- `tui_bang_empty`, `tui_bang_bash`: manual `!` shell input matches Vibe's empty-command error, command-output rendering, and saved session context injection.
+- `tui_bang_empty`, `tui_bang_bash`, `tui_bang_large_context`: manual `!` shell input matches Vibe's empty-command error, command-output rendering, saved session context injection, and `bash.max_output_bytes` truncation for large injected stdout/stderr.
 - `tui_external_editor_input`, `tui_external_editor_empty`: `Ctrl+G` opens the configured external editor for filled and empty input, passes the current buffer through a `vibe_*.md` temp file, strips trailing whitespace, and replaces the prompt with edited content.
 - `tui_scroll_shift_up`, `tui_scroll_shift_up_down`: global `Shift+Up` and `Shift+Down` scroll the chat viewport by Vibe's five-line step and restore the bottom view.
 - `tui_prompt_todo`, `tui_prompt_todo_empty`: forced `todo.write`/`todo.read` render Vibe's todo result widget, including empty state, status ordering, and icons.

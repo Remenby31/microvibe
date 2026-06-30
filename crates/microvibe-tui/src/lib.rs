@@ -1346,6 +1346,7 @@ async fn run_inner(
                                     shell_command,
                                     &cwd,
                                     &result,
+                                    bash_max_output_bytes(&config),
                                 ));
                             let _ = active_session.save().await;
                         }
@@ -4726,7 +4727,28 @@ fn manual_bash_display_lines(command: &str, result: &ManualBashResult) -> Vec<St
     lines
 }
 
-fn manual_bash_context(command: &str, cwd: &Path, result: &ManualBashResult) -> String {
+fn bash_max_output_bytes(config: &Config) -> usize {
+    config
+        .tools
+        .get("bash")
+        .and_then(|tool| tool.max_output_bytes)
+        .unwrap_or(16_000)
+}
+
+fn cap_manual_bash_output(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let capped = text.chars().take(limit).collect::<String>();
+    format!("{capped}\n... [truncated]")
+}
+
+fn manual_bash_context(
+    command: &str,
+    cwd: &Path,
+    result: &ManualBashResult,
+    max_output_bytes: usize,
+) -> String {
     let mut sections = vec![
         "Manual `!` command result from the user. Use this as context only.".to_string(),
         format!("Command: `{command}`"),
@@ -4737,16 +4759,12 @@ fn manual_bash_context(command: &str, cwd: &Path, result: &ManualBashResult) -> 
     }
     sections.push(format!("Exit code: {}", result.exit_code));
     if !result.stdout.is_empty() {
-        sections.push(format!(
-            "Stdout:\n```text\n{}\n```",
-            result.stdout.trim_end()
-        ));
+        let stdout = cap_manual_bash_output(&result.stdout, max_output_bytes);
+        sections.push(format!("Stdout:\n```text\n{}\n```", stdout.trim_end()));
     }
     if !result.stderr.is_empty() {
-        sections.push(format!(
-            "Stderr:\n```text\n{}\n```",
-            result.stderr.trim_end()
-        ));
+        let stderr = cap_manual_bash_output(&result.stderr, max_output_bytes);
+        sections.push(format!("Stderr:\n```text\n{}\n```", stderr.trim_end()));
     }
     if result.stdout.is_empty() && result.stderr.is_empty() {
         sections.push("Output:\n```text\n(no output)\n```".to_string());
@@ -6216,6 +6234,38 @@ mod tests {
         delete_to_line_start(&mut input, &mut cursor);
         assert_eq!(input, "first line\n\n");
         assert_eq!(cursor, "first line\n\n".len());
+    }
+
+    #[test]
+    fn manual_bash_context_caps_stdout_and_stderr_like_vibe() {
+        let result = ManualBashResult {
+            stdout: "abcdefghij".to_string(),
+            stderr: "1234567890".to_string(),
+            exit_code: 1,
+            status: None,
+        };
+
+        let context = manual_bash_context("demo", Path::new("/tmp/workspace"), &result, 5);
+
+        assert!(context.contains("Stdout:\n```text\nabcde\n... [truncated]\n```"));
+        assert!(context.contains("Stderr:\n```text\n12345\n... [truncated]\n```"));
+        assert!(!context.contains("abcdefghij"));
+        assert!(!context.contains("1234567890"));
+    }
+
+    #[test]
+    fn manual_bash_context_leaves_short_output_unchanged() {
+        let result = ManualBashResult {
+            stdout: "short\n".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            status: None,
+        };
+
+        let context = manual_bash_context("echo short", Path::new("/tmp/workspace"), &result, 10);
+
+        assert!(context.contains("Stdout:\n```text\nshort\n```"));
+        assert!(!context.contains("[truncated]"));
     }
 
     #[test]
