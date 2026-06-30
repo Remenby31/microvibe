@@ -635,6 +635,15 @@ async fn run_inner(
                         quit_confirmation = None;
                         continue;
                     }
+                    if let Some(removed) = queued_inputs.pop_back() {
+                        remove_queued_input_lines(
+                            &mut transcript,
+                            &removed,
+                            queued_inputs.is_empty(),
+                        );
+                        quit_confirmation = None;
+                        continue;
+                    }
                     if quit_confirmation
                         .as_ref()
                         .is_some_and(|confirmation| confirmation.key == "Ctrl+C")
