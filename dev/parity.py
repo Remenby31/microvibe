@@ -342,6 +342,7 @@ CASES: dict[str, Case] = {
     "tui_prompt_read_expand_collapse_tool": Case("tui_prompt_read_expand_collapse_tool", "tui", b"read sample\x1b\r\x0f\x0f", settle=1.0, timeout=10.0),
     "tui_bang_empty": Case("tui_bang_empty", "tui", b"!\x1b\r", settle=1.0, timeout=5.0),
     "tui_bang_bash": Case("tui_bang_bash", "tui", b"!printf manual-bash\x1b\r", settle=1.0, timeout=8.0),
+    "tui_bang_queue_bash": Case("tui_bang_queue_bash", "tui", b"", settle=1.0, timeout=8.0),
     "tui_bang_large_context": Case("tui_bang_large_context", "tui", b"!python3 -c 'import sys; print(\"x\"*80); print(\"e\"*80, file=sys.stderr)'\x1b\r", settle=1.0, timeout=8.0),
     "tui_prompt_bash": Case("tui_prompt_bash", "tui", b"run bash\x1b\r", settle=1.0, timeout=10.0),
     "tui_animation_bash_spinner": Case("tui_animation_bash_spinner", "animation_tui", b"run bash\x1b\r", settle=1.0, timeout=10.0),
@@ -746,6 +747,7 @@ SMOKE_CASES = [
     "tui_prompt_read_expand_collapse_tool",
     "tui_bang_empty",
     "tui_bang_bash",
+    "tui_bang_queue_bash",
     "tui_bang_large_context",
     "tui_prompt_bash",
     "tui_approval_grace_enter",
@@ -3707,6 +3709,21 @@ def run_pty(cmd: list[str], env: dict[str, str], case: Case, cwd: pathlib.Path) 
                 os.write(fd, b"run bash\x1b\r")
                 transcript.extend(read_until(fd, [b"Permission for the bash tool"], case.timeout))
                 time.sleep(0.6)
+            except OSError:
+                pass
+            transcript.extend(
+                read_available(
+                    fd,
+                    time.monotonic() + case.timeout,
+                    case.settle,
+                )
+            )
+        elif case.name == "tui_bang_queue_bash":
+            try:
+                os.write(fd, b"!sleep 0.5\r")
+                time.sleep(0.1)
+                os.write(fd, b"!printf queued-bash\r")
+                transcript.extend(read_until(fd, [b"queued-bash"], case.timeout))
             except OSError:
                 pass
             transcript.extend(
@@ -8099,6 +8116,7 @@ def session_projection_text(case_name: str, base: pathlib.Path, label: str) -> s
         "programmatic_continue_json",
         "programmatic_resume_id_json",
         "tui_bang_bash",
+        "tui_bang_queue_bash",
         "tui_bang_large_context",
         "tui_compact_one",
         "tui_loop_create",

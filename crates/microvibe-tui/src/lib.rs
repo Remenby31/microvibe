@@ -309,6 +309,7 @@ async fn run_inner(
     let mut scheduled_loops: Vec<ScheduledLoop> = Vec::new();
     let mut active_key_modifiers = KeyModifiers::empty();
     let mut queued_inputs: VecDeque<String> = VecDeque::new();
+    let mut running_bash: Option<RunningManualBash> = None;
 
     if let Some(submitted) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
         add_input_history(&mut input_history, &submitted);
@@ -417,7 +418,31 @@ async fn run_inner(
                 }
             }
         }
+        if running_bash
+            .as_ref()
+            .is_some_and(|running| running.handle.is_finished())
+            && let Some(running) = running_bash.take()
+        {
+            finish_manual_bash(
+                &mut transcript,
+                session.as_mut(),
+                &config,
+                running.command,
+                running.cwd,
+                running
+                    .handle
+                    .await
+                    .unwrap_or_else(|error| ManualBashResult {
+                        stdout: String::new(),
+                        stderr: format!("Command failed: {error}"),
+                        exit_code: 1,
+                        status: None,
+                    }),
+            )
+            .await;
+        }
         if running_turn.is_none()
+            && running_bash.is_none()
             && bottom_panel.is_none()
             && let Some(submitted) = queued_inputs.pop_front()
         {
@@ -428,20 +453,7 @@ async fn run_inner(
                 if shell_command.is_empty() {
                     transcript.extend(manual_bash_empty_lines());
                 } else {
-                    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                    let result = run_manual_bash_command(shell_command).await;
-                    if let Some(active_session) = session.as_mut() {
-                        active_session
-                            .agent
-                            .inject_user_context(manual_bash_context(
-                                shell_command,
-                                &cwd,
-                                &result,
-                                bash_max_output_bytes(&config),
-                            ));
-                        let _ = active_session.save().await;
-                    }
-                    transcript.extend(manual_bash_display_lines(shell_command, &result));
+                    running_bash = Some(spawn_manual_bash(shell_command.to_string()));
                 }
             } else {
                 let visible_input =
@@ -1245,7 +1257,7 @@ async fn run_inner(
                         }
                         continue;
                     }
-                    if running_turn.is_some() || session.is_none() {
+                    if running_turn.is_some() || running_bash.is_some() || session.is_none() {
                         let command = input.trim();
                         if command.is_empty() {
                             continue;
@@ -1416,20 +1428,7 @@ async fn run_inner(
                             transcript.extend(manual_bash_empty_lines());
                             continue;
                         }
-                        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                        let result = run_manual_bash_command(shell_command).await;
-                        if let Some(active_session) = session.as_mut() {
-                            active_session
-                                .agent
-                                .inject_user_context(manual_bash_context(
-                                    shell_command,
-                                    &cwd,
-                                    &result,
-                                    bash_max_output_bytes(&config),
-                                ));
-                            let _ = active_session.save().await;
-                        }
-                        transcript.extend(manual_bash_display_lines(shell_command, &result));
+                        running_bash = Some(spawn_manual_bash(shell_command.to_string()));
                         continue;
                     }
                     if let Some(target) = submitted.strip_prefix('&') {
@@ -2234,6 +2233,12 @@ struct RunningTurn {
     queued_question: Option<QuestionResponse>,
 }
 
+struct RunningManualBash {
+    command: String,
+    cwd: PathBuf,
+    handle: JoinHandle<ManualBashResult>,
+}
+
 fn spawn_agent_turn(
     mut active_session: Session,
     visible_input: String,
@@ -2262,6 +2267,38 @@ fn spawn_agent_turn(
             (active_session, result)
         }),
     }
+}
+
+fn spawn_manual_bash(command: String) -> RunningManualBash {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let command_for_task = command.clone();
+    RunningManualBash {
+        command,
+        cwd,
+        handle: tokio::spawn(async move { run_manual_bash_command(&command_for_task).await }),
+    }
+}
+
+async fn finish_manual_bash(
+    transcript: &mut Vec<String>,
+    session: Option<&mut Session>,
+    config: &Config,
+    command: String,
+    cwd: PathBuf,
+    result: ManualBashResult,
+) {
+    if let Some(active_session) = session {
+        active_session
+            .agent
+            .inject_user_context(manual_bash_context(
+                &command,
+                &cwd,
+                &result,
+                bash_max_output_bytes(config),
+            ));
+        let _ = active_session.save().await;
+    }
+    transcript.extend(manual_bash_display_lines(&command, &result));
 }
 
 fn append_queued_input_lines(
