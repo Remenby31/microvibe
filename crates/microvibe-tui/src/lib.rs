@@ -610,7 +610,10 @@ async fn run_inner(
                     width: 1,
                     height: 1,
                 };
-                frame.render_widget(Paragraph::new("▅"), marker);
+                frame.render_widget(
+                    Paragraph::new(Line::styled("▅", Style::default().fg(palette.foreground))),
+                    marker,
+                );
             }
             frame.render_widget(prompt, chunks[1]);
             if bottom_panel.is_none() {
@@ -623,7 +626,10 @@ async fn run_inner(
             }
             if let Some(debug_area) = debug_area {
                 frame.render_widget(
-                    Paragraph::new(debug_console_text(debug_area.height)),
+                    Paragraph::new(Line::styled(
+                        debug_console_text(debug_area.height),
+                        Style::default().fg(palette.muted),
+                    )),
                     debug_area,
                 );
             }
@@ -2015,6 +2021,9 @@ struct ThemePalette {
     foreground: Color,
     secondary: Color,
     muted: Color,
+    success: Color,
+    warning: Color,
+    error: Color,
 }
 
 fn current_theme_name(config: &Config) -> String {
@@ -2031,12 +2040,18 @@ fn theme_palette(theme: &str) -> ThemePalette {
             foreground: Color::Rgb(45, 45, 45),
             secondary: Color::Rgb(31, 109, 137),
             muted: Color::Rgb(105, 105, 105),
+            success: Color::Rgb(34, 139, 34),
+            warning: Color::Rgb(181, 118, 20),
+            error: Color::Rgb(185, 28, 28),
         }
     } else {
         ThemePalette {
             foreground: VIBE_FOREGROUND,
             secondary: VIBE_SECONDARY,
             muted: VIBE_MUTED,
+            success: VIBE_SUCCESS,
+            warning: VIBE_WARNING,
+            error: VIBE_ERROR,
         }
     }
 }
@@ -2127,7 +2142,7 @@ fn input_panel_lines<'a>(
         let content_width = width.saturating_sub(2);
         lines.push(Line::styled(
             format!("┌{}┐", "─".repeat(content_width)),
-            Style::default().fg(VIBE_MUTED),
+            Style::default().fg(palette.muted),
         ));
         for (idx, item) in completion
             .items
@@ -2150,16 +2165,16 @@ fn input_panel_lines<'a>(
             };
             let style = if idx == completion.selected {
                 Style::default()
-                    .fg(VIBE_SECONDARY)
-                    .add_modifier(Modifier::BOLD)
+                    .fg(palette.foreground)
+                    .add_modifier(Modifier::BOLD | Modifier::REVERSED)
             } else {
-                Style::default().fg(VIBE_FOREGROUND)
+                Style::default().fg(palette.foreground)
             };
             lines.push(Line::styled(format!("│ {row}│"), style));
         }
         lines.push(Line::styled(
             format!("└{}┘", "─".repeat(content_width)),
-            Style::default().fg(VIBE_MUTED),
+            Style::default().fg(palette.muted),
         ));
     }
     lines.push(Line::styled(
@@ -2272,6 +2287,22 @@ fn styled_transcript_row(row: &str, palette: ThemePalette) -> Line<'static> {
     if row.starts_with("Mistral Vibe") {
         return styled_banner_title_row(row, palette);
     }
+    if let Some(command) = row.strip_prefix("/ ") {
+        return Line::from(vec![
+            Span::styled(
+                "/",
+                Style::default()
+                    .fg(VIBE_ORANGE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {command}"),
+                Style::default()
+                    .fg(VIBE_ORANGE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+    }
     if row == "Type /help for more information" {
         return Line::from(vec![
             Span::styled("Type ".to_string(), Style::default().fg(palette.foreground)),
@@ -2290,18 +2321,41 @@ fn styled_transcript_row(row: &str, palette: ThemePalette) -> Line<'static> {
                     .fg(VIBE_ORANGE)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(prompt.to_string(), Style::default().fg(palette.foreground)),
+            Span::styled(
+                prompt.to_string(),
+                Style::default()
+                    .fg(palette.foreground)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]);
     }
 
     let style = if row.chars().any(is_braille_char) {
         Style::default().fg(palette.foreground)
-    } else if row.starts_with('─') || row.starts_with("  ⎣") {
-        Style::default().fg(palette.muted)
+    } else if row.starts_with(QUEUE_HEADER_LABEL) || row.starts_with(QUEUE_HEADER_PAUSED_LABEL) {
+        Style::default()
+            .fg(VIBE_ORANGE)
+            .add_modifier(Modifier::BOLD | Modifier::ITALIC)
+    } else if row.starts_with("✓ ") || row.contains(" ✓ ") {
+        Style::default().fg(palette.success)
+    } else if row.starts_with("✕ ")
+        || row.starts_with("✗ ")
+        || row.contains(" ✕ ")
+        || row.contains(" ✗ ")
+    {
+        Style::default().fg(palette.error)
+    } else if row.starts_with("⚠ ") || row.contains(" ⚠ ") {
+        Style::default().fg(palette.warning)
+    } else if row.starts_with("  ⎢ -") || row.starts_with("  ⎣ -") {
+        Style::default().fg(palette.error)
+    } else if row.starts_with("  ⎢ +") || row.starts_with("  ⎣ +") {
+        Style::default().fg(palette.success)
     } else if row.contains("Initializing") || row.contains("Running ") {
         Style::default().fg(VIBE_ORANGE)
     } else if row.contains("Error") || row.contains("error:") {
-        Style::default().fg(Color::Red)
+        Style::default().fg(palette.error)
+    } else if row.starts_with('─') || row.starts_with("  ⎣") || row.starts_with("  └") {
+        Style::default().fg(palette.muted)
     } else {
         Style::default().fg(palette.foreground)
     };
@@ -3905,7 +3959,7 @@ fn panel_lines(
                     .fg(palette.secondary)
                     .add_modifier(Modifier::BOLD)
             } else if row.contains("Error") {
-                Style::default().fg(Color::Red)
+                Style::default().fg(palette.error)
             } else if idx + 1 == row_count {
                 Style::default().fg(palette.muted)
             } else {
