@@ -7,6 +7,7 @@ use autocomplete::{
 };
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use crossterm::Command as CrosstermCommand;
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, ModifierKeyCode,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -32,6 +33,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use sha1::Digest;
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -53,6 +55,7 @@ pub async fn run_with_initial_prompt(config: Config, initial_prompt: Option<Stri
     execute!(
         stdout,
         EnterAlternateScreen,
+        DisableModifyOtherKeys,
         PushKeyboardEnhancementFlags(keyboard_enhancement_flags())
     )?;
     let backend = CrosstermBackend::new(stdout);
@@ -64,6 +67,8 @@ pub async fn run_with_initial_prompt(config: Config, initial_prompt: Option<Stri
     execute!(
         terminal.backend_mut(),
         PopKeyboardEnhancementFlags,
+        ResetKeyboardEnhancementFlags,
+        DisableModifyOtherKeys,
         LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
@@ -73,8 +78,51 @@ pub async fn run_with_initial_prompt(config: Config, initial_prompt: Option<Stri
 fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResetKeyboardEnhancementFlags;
+
+impl CrosstermCommand for ResetKeyboardEnhancementFlags {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        f.write_str("\x1b[<u")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "keyboard enhancement reset is not implemented for the legacy Windows API",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DisableModifyOtherKeys;
+
+impl CrosstermCommand for DisableModifyOtherKeys {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        f.write_str("\x1b[>4;0m")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "modifyOtherKeys reset is not implemented for the legacy Windows API",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        false
+    }
 }
 
 fn modifier_key_modifier(code: &KeyCode) -> Option<KeyModifiers> {
@@ -117,6 +165,13 @@ fn normalize_key_event(
     }
     key.modifiers |= *active_key_modifiers;
     Some(key)
+}
+
+fn is_copy_selection_shortcut(key: &event::KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL)
+        && (matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y'))
+            || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::SHIFT))
+            || key.code == KeyCode::Char('C'))
 }
 
 async fn run_inner(
@@ -431,6 +486,10 @@ async fn run_inner(
                         break;
                     }
                 }
+                Event::Key(key) if is_copy_selection_shortcut(&key) => {
+                    // Vibe reserves Ctrl+Y and Ctrl+Shift+C for copying the terminal selection.
+                    quit_confirmation = None;
+                }
                 Event::Key(key)
                     if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(event::KeyModifiers::CONTROL) =>
@@ -564,13 +623,6 @@ async fn run_inner(
                         && key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     // Vibe consumes the voice-recording shortcut even when voice mode is off.
-                    quit_confirmation = None;
-                }
-                Event::Key(key)
-                    if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y'))
-                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
-                    // Vibe reserves Ctrl+Y for copying the current terminal selection.
                     quit_confirmation = None;
                 }
                 Event::Key(key)
@@ -5656,8 +5708,20 @@ mod tests {
         let flags = keyboard_enhancement_flags();
         assert!(flags.contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
         assert!(flags.contains(KeyboardEnhancementFlags::REPORT_EVENT_TYPES));
-        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES));
         assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS));
+        assert!(!flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES));
+    }
+
+    fn ansi_for(command: impl CrosstermCommand) -> String {
+        let mut out = String::new();
+        command.write_ansi(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn keyboard_reset_commands_match_codex_terminal_contract() {
+        assert_eq!(ansi_for(DisableModifyOtherKeys), "\x1b[>4;0m");
+        assert_eq!(ansi_for(ResetKeyboardEnhancementFlags), "\x1b[<u");
     }
 
     #[test]
@@ -5681,6 +5745,26 @@ mod tests {
         assert!(normalized.modifiers.contains(KeyModifiers::CONTROL));
         assert!(normalize_key_event(ctrl_release, &mut active).is_none());
         assert!(!active.contains(KeyModifiers::CONTROL));
+    }
+
+    #[test]
+    fn copy_selection_shortcuts_match_vibe_bindings() {
+        assert!(is_copy_selection_shortcut(&event::KeyEvent::new(
+            KeyCode::Char('y'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(is_copy_selection_shortcut(&event::KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        )));
+        assert!(is_copy_selection_shortcut(&event::KeyEvent::new(
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!is_copy_selection_shortcut(&event::KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
     }
 
     #[test]

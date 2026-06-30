@@ -84,7 +84,8 @@ def petit_chat_frames(raw: bytes, rows: int = 36, cols: int = 120) -> list[str]:
 
 def main() -> int:
     raw = ensure_startup_raw()
-    require("keyboard enhancement flags do not request full Ghostty/Kitty events", b"\x1b[>15u" in raw)
+    require("modifyOtherKeys is not disabled before keyboard setup", b"\x1b[>4;0m" in raw)
+    require("keyboard enhancement flags do not match Codex's Kitty contract", b"\x1b[>7u" in raw)
     require("prompt cursor is not explicitly visible", b"\x1b[?25h" in raw)
 
     for name, sequence in EXPECTED_RGB.items():
