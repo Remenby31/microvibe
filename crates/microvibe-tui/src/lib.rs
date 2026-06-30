@@ -9,8 +9,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use crossterm::Command as CrosstermCommand;
 use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, ModifierKeyCode,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
+    KeyboardEnhancementFlags, ModifierKeyCode, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::style::force_color_output;
@@ -59,6 +60,7 @@ pub async fn run_with_initial_prompt(config: Config, initial_prompt: Option<Stri
     execute!(
         stdout,
         EnterAlternateScreen,
+        EnableBracketedPaste,
         DisableModifyOtherKeys,
         PushKeyboardEnhancementFlags(keyboard_enhancement_flags())
     )?;
@@ -75,6 +77,7 @@ pub async fn run_with_initial_prompt(config: Config, initial_prompt: Option<Stri
         terminal.backend_mut(),
         PopKeyboardEnhancementFlags,
         ResetKeyboardEnhancementFlags,
+        DisableBracketedPaste,
         DisableModifyOtherKeys,
         LeaveAlternateScreen
     )?;
@@ -1915,6 +1918,26 @@ async fn run_inner(
                     }
                     transcript.extend([String::new(), String::new()]);
                 }
+                Event::Paste(text) if bottom_panel.is_none() => {
+                    insert_input_str(
+                        &mut input,
+                        &mut input_cursor,
+                        &maybe_prepend_at_for_image_path(&text),
+                    );
+                    rewrite_bare_image_paths_in_input(&mut input, &mut input_cursor);
+                    reset_input_history_navigation(
+                        &mut input_history_index,
+                        &mut input_history_draft,
+                    );
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
                 Event::Key(key) => {
                     if let KeyCode::Char(ch) = key.code {
                         if let Some(panel) = bottom_panel.as_mut() {
@@ -1929,6 +1952,7 @@ async fn run_inner(
                         }
                         quit_confirmation = None;
                         insert_input_char(&mut input, &mut input_cursor, ch);
+                        rewrite_bare_image_paths_in_input(&mut input, &mut input_cursor);
                         reset_input_history_navigation(
                             &mut input_history_index,
                             &mut input_history_draft,
@@ -4198,6 +4222,148 @@ fn is_image_path(path: &Path) -> bool {
     )
 }
 
+fn maybe_prepend_at_for_image_path(pasted: &str) -> String {
+    let text = pasted.trim();
+    if text.is_empty() || text.contains('\n') || text.contains('\r') {
+        return pasted.to_string();
+    }
+    let candidate = unescape_spaces(strip_matched_quotes(text));
+    if !path_candidate_starts_with_root(&candidate) || !is_image_file_candidate(&candidate) {
+        return pasted.to_string();
+    }
+    format!("@{}", quote_path_if_needed(&candidate))
+}
+
+fn rewrite_bare_image_paths_in_text(text: &str) -> String {
+    if !text.chars().any(|ch| matches!(ch, '/' | '~' | '\'' | '"')) {
+        return text.to_string();
+    }
+    let mut rewritten = String::new();
+    let mut pos = 0;
+    while pos < text.len() {
+        if paste_path_token_boundary(text, pos)
+            && let Some((candidate, end)) = extract_paste_path_token(text, pos)
+            && is_image_file_candidate(&candidate)
+        {
+            rewritten.push('@');
+            rewritten.push_str(&quote_path_if_needed(&candidate));
+            pos = end;
+            continue;
+        }
+        let ch = text[pos..].chars().next().expect("pos is char boundary");
+        rewritten.push(ch);
+        pos += ch.len_utf8();
+    }
+    rewritten
+}
+
+fn is_image_file_candidate(candidate: &str) -> bool {
+    let Some(path) = expand_paste_path_candidate(candidate) else {
+        return false;
+    };
+    path.is_absolute() && is_image_path(&path) && path.is_file()
+}
+
+fn expand_paste_path_candidate(candidate: &str) -> Option<PathBuf> {
+    if let Some(rest) = candidate.strip_prefix("~/") {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(rest));
+    }
+    Some(PathBuf::from(candidate))
+}
+
+fn quote_path_if_needed(path: &str) -> String {
+    if path.contains(' ') {
+        format!("'{path}'")
+    } else {
+        path.to_string()
+    }
+}
+
+fn unescape_spaces(text: &str) -> String {
+    text.replace("\\ ", " ")
+}
+
+fn strip_matched_quotes(text: &str) -> &str {
+    if text.len() >= 2
+        && let Some(first) = text.chars().next()
+        && matches!(first, '\'' | '"')
+        && text.ends_with(first)
+    {
+        let start = first.len_utf8();
+        let end = text.len() - first.len_utf8();
+        return &text[start..end];
+    }
+    text
+}
+
+fn path_candidate_starts_with_root(candidate: &str) -> bool {
+    candidate.starts_with('/') || candidate.starts_with('~')
+}
+
+fn paste_path_token_boundary(text: &str, pos: usize) -> bool {
+    if pos == 0 {
+        return true;
+    }
+    let Some(previous) = text[..pos].chars().next_back() else {
+        return true;
+    };
+    if previous == '@' {
+        return false;
+    }
+    previous.is_whitespace() || matches!(previous, '(' | '<' | '[')
+}
+
+fn extract_paste_path_token(text: &str, pos: usize) -> Option<(String, usize)> {
+    let head = text[pos..].chars().next()?;
+    if matches!(head, '\'' | '"') {
+        return extract_quoted_paste_path_token(text, pos, head);
+    }
+    if path_candidate_starts_with_root(&text[pos..]) {
+        return extract_bare_paste_path_token(text, pos);
+    }
+    None
+}
+
+fn extract_quoted_paste_path_token(
+    text: &str,
+    start: usize,
+    quote: char,
+) -> Option<(String, usize)> {
+    let mut end = start + quote.len_utf8();
+    while end < text.len() {
+        let ch = text[end..].chars().next()?;
+        if ch == quote {
+            return Some((
+                text[start + quote.len_utf8()..end].to_string(),
+                end + ch.len_utf8(),
+            ));
+        }
+        end += ch.len_utf8();
+    }
+    None
+}
+
+fn extract_bare_paste_path_token(text: &str, start: usize) -> Option<(String, usize)> {
+    let mut candidate = String::new();
+    let mut end = start;
+    while end < text.len() {
+        let ch = text[end..].chars().next()?;
+        if ch == '\\' && text[end + ch.len_utf8()..].starts_with(' ') {
+            candidate.push(' ');
+            end += ch.len_utf8() + ' '.len_utf8();
+            continue;
+        }
+        if ch.is_whitespace() {
+            break;
+        }
+        candidate.push(ch);
+        end += ch.len_utf8();
+    }
+    (!candidate.is_empty()).then_some((candidate, end))
+}
+
 fn render_text_resource(resource: &PathResource) -> Option<String> {
     const MAX_EMBED_BYTES: u64 = 256 * 1024;
     let metadata = fs::metadata(&resource.path).ok()?;
@@ -5148,6 +5314,70 @@ fn insert_input_char(input: &mut String, cursor: &mut usize, ch: char) {
     }
     input.insert(*cursor, ch);
     *cursor += ch.len_utf8();
+}
+
+fn insert_input_str(input: &mut String, cursor: &mut usize, text: &str) {
+    *cursor = (*cursor).min(input.len());
+    if !input.is_char_boundary(*cursor) {
+        *cursor = previous_input_boundary(input, *cursor);
+    }
+    input.insert_str(*cursor, text);
+    *cursor += text.len();
+}
+
+fn rewrite_bare_image_paths_in_input(input: &mut String, cursor: &mut usize) {
+    let old = input.clone();
+    let rewritten = rewrite_bare_image_paths_in_text(&old);
+    if rewritten == old {
+        return;
+    }
+    let old_cursor = (*cursor).min(old.len());
+    *input = rewritten;
+    *cursor = adjusted_cursor_after_rewrite(&old, input, old_cursor);
+}
+
+fn adjusted_cursor_after_rewrite(old: &str, new: &str, old_cursor: usize) -> usize {
+    if old_cursor >= old.len() {
+        return new.len();
+    }
+    let prefix = common_prefix_len(old, new).min(old_cursor);
+    if old_cursor <= prefix {
+        return old_cursor;
+    }
+    let suffix = common_suffix_len(&old[prefix..], &new[prefix..]);
+    let old_change_end = old.len().saturating_sub(suffix);
+    let new_change_end = new.len().saturating_sub(suffix);
+    if old_cursor >= old_change_end {
+        new_change_end + (old_cursor - old_change_end)
+    } else {
+        new_change_end
+    }
+    .min(new.len())
+}
+
+fn common_prefix_len(left: &str, right: &str) -> usize {
+    let mut len = 0;
+    for ((left_index, left_ch), (right_index, right_ch)) in
+        left.char_indices().zip(right.char_indices())
+    {
+        if left_ch != right_ch {
+            break;
+        }
+        len = left_index + left_ch.len_utf8();
+        debug_assert_eq!(len, right_index + right_ch.len_utf8());
+    }
+    len
+}
+
+fn common_suffix_len(left: &str, right: &str) -> usize {
+    let mut len = 0;
+    for (left_ch, right_ch) in left.chars().rev().zip(right.chars().rev()) {
+        if left_ch != right_ch {
+            break;
+        }
+        len += left_ch.len_utf8();
+    }
+    len
 }
 
 fn backspace_input(input: &mut String, cursor: &mut usize) {
@@ -6467,6 +6697,64 @@ mod tests {
         assert_eq!(rendered, format!("inspect {}", image.display()));
         assert_eq!(resources.len(), 1);
         assert_eq!(resources[0].alias, image.display().to_string());
+    }
+
+    #[test]
+    fn pasted_absolute_image_path_gets_at_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("shot.png");
+        fs::write(&image, b"not-really-a-png").unwrap();
+
+        assert_eq!(
+            maybe_prepend_at_for_image_path(&image.display().to_string()),
+            format!("@{}", image.display())
+        );
+    }
+
+    #[test]
+    fn pasted_escaped_image_path_with_spaces_is_quoted() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("has space.png");
+        fs::write(&image, b"not-really-a-png").unwrap();
+        let escaped = image.display().to_string().replace(' ', "\\ ");
+
+        assert_eq!(
+            maybe_prepend_at_for_image_path(&escaped),
+            format!("@'{}'", image.display())
+        );
+    }
+
+    #[test]
+    fn bare_image_path_rewrite_is_idempotent_and_skips_non_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("shot.png");
+        let notes = dir.path().join("notes.md");
+        fs::write(&image, b"not-really-a-png").unwrap();
+        fs::write(&notes, "hello").unwrap();
+
+        let original = format!("see {} and {}", image.display(), notes.display());
+        let once = rewrite_bare_image_paths_in_text(&original);
+        let twice = rewrite_bare_image_paths_in_text(&once);
+
+        assert_eq!(
+            once,
+            format!("see @{} and {}", image.display(), notes.display())
+        );
+        assert_eq!(twice, once);
+    }
+
+    #[test]
+    fn input_rewrite_updates_cursor_after_inserted_at_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("shot.png");
+        fs::write(&image, b"not-really-a-png").unwrap();
+        let mut input = format!("look {}", image.display());
+        let mut cursor = input.len();
+
+        rewrite_bare_image_paths_in_input(&mut input, &mut cursor);
+
+        assert_eq!(input, format!("look @{}", image.display()));
+        assert_eq!(cursor, input.len());
     }
 
     #[test]

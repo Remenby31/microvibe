@@ -760,11 +760,15 @@ fn title_from_messages(messages: &[Message]) -> Option<String> {
         .as_ref()
         .and_then(display_content_title_text)
         .unwrap_or_else(|| text_content(first_user));
-    if text.is_empty() {
+    let title_text = format_session_title_text(&text);
+    if title_text.is_empty() {
         return Some("Untitled session".to_string());
     }
-    let mut title = text.chars().take(MAX_TITLE_LENGTH).collect::<String>();
-    if text.chars().count() > MAX_TITLE_LENGTH {
+    let mut title = title_text
+        .chars()
+        .take(MAX_TITLE_LENGTH)
+        .collect::<String>();
+    if title_text.chars().count() > MAX_TITLE_LENGTH {
         title.push('…');
     }
     Some(title)
@@ -780,6 +784,88 @@ fn display_content_title_text(value: &Value) -> Option<String> {
         .filter_map(|block| block.get("text").and_then(Value::as_str))
         .collect::<String>();
     (!text.is_empty()).then_some(text)
+}
+
+fn format_session_title_text(text: &str) -> String {
+    collapse_title_whitespace(&render_title_mentions(text))
+}
+
+fn render_title_mentions(text: &str) -> String {
+    if !text.contains('@') {
+        return text.to_string();
+    }
+    let mut rendered = String::new();
+    let mut pos = 0;
+    while pos < text.len() {
+        let ch = text[pos..].chars().next().expect("pos is char boundary");
+        if ch == '@'
+            && title_path_anchor(text, pos)
+            && let Some((candidate, end)) = extract_title_path_candidate(text, pos + ch.len_utf8())
+        {
+            rendered.push('@');
+            rendered.push_str(&title_mention_name(&candidate));
+            pos = end;
+            continue;
+        }
+        rendered.push(ch);
+        pos += ch.len_utf8();
+    }
+    rendered
+}
+
+fn collapse_title_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn title_path_anchor(text: &str, pos: usize) -> bool {
+    if pos == 0 {
+        return true;
+    }
+    text[..pos]
+        .chars()
+        .next_back()
+        .is_none_or(|ch| !(ch.is_alphanumeric() || ch == '_'))
+}
+
+fn extract_title_path_candidate(text: &str, start: usize) -> Option<(String, usize)> {
+    if start >= text.len() {
+        return None;
+    }
+    let first = text[start..].chars().next()?;
+    if matches!(first, '\'' | '"') {
+        let quote_len = first.len_utf8();
+        let mut end = start + quote_len;
+        while end < text.len() {
+            let ch = text[end..].chars().next()?;
+            if ch == first {
+                return Some((
+                    text[start + quote_len..end].to_string(),
+                    end + ch.len_utf8(),
+                ));
+            }
+            end += ch.len_utf8();
+        }
+        return None;
+    }
+
+    let mut end = start;
+    while end < text.len() {
+        let ch = text[end..].chars().next()?;
+        if !(ch.is_alphanumeric() || "._/\\-()[]{}~".contains(ch)) {
+            break;
+        }
+        end += ch.len_utf8();
+    }
+    (end > start).then(|| (text[start..end].to_string(), end))
+}
+
+fn title_mention_name(candidate: &str) -> String {
+    Path::new(candidate)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(candidate)
+        .to_string()
 }
 
 fn text_content(message: &Message) -> String {
@@ -1118,5 +1204,18 @@ mod tests {
         assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].session_id.0, "newer123-session");
         assert_eq!(sessions[1].session_id.0, "older123-session");
+    }
+
+    #[test]
+    fn auto_title_renders_path_mentions_as_basenames_like_vibe() {
+        let mut message = Message::text(Role::User, "look /tmp/workspace/image.png");
+        message.display_content = Some(Value::String(
+            "look @/tmp/workspace/image.png\nplease".to_string(),
+        ));
+
+        assert_eq!(
+            title_from_messages(&[message]),
+            Some("look @image.png please".to_string())
+        );
     }
 }
