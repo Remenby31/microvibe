@@ -1,29 +1,48 @@
-[package]
-name = "microvibe"
-version = "1.1.0"
-edition = "2021"
-description = "Ultra-light CLI coding agent in Rust"
+[workspace]
+members = [
+    "crates/microvibe-cli",
+    "crates/microvibe-config",
+    "crates/microvibe-core",
+    "crates/microvibe-protocol",
+    "crates/microvibe-tools",
+    "crates/microvibe-tui",
+]
+default-members = ["crates/microvibe-cli"]
+resolver = "2"
 
-[dependencies]
-tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/mistralai/mistral-vibe"
+
+[workspace.dependencies]
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
-colored = "2"
+crossterm = "0.28"
 dirs = "5"
+futures-util = "0.3"
 glob = "0.3"
 regex = "1"
-uuid = { version = "1", features = ["v4"] }
-futures-util = "0.3"
-bytes = "1"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha1 = "0.10"
+sha2 = "0.10"
+shlex = "1"
+tokio = { version = "1", features = ["full"] }
 toml = "0.8"
-libc = "0.2"
+uuid = { version = "1", features = ["serde", "v4", "v7"] }
 ratatui = "0.29"
-crossterm = "0.28"
+thiserror = "2"
+tracing = "0.1"
+tempfile = "3"
 
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-strip = true
+microvibe-config = { path = "crates/microvibe-config" }
+microvibe-core = { path = "crates/microvibe-core" }
+microvibe-protocol = { path = "crates/microvibe-protocol" }
+microvibe-tools = { path = "crates/microvibe-tools" }
+microvibe-tui = { path = "crates/microvibe-tui" }

@@ -1,0 +1,28 @@
+[package]
+name = "microvibe-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "microvibe_tools"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+dirs = { workspace = true }
+glob = { workspace = true }
+microvibe-protocol = { workspace = true }
+microvibe-config = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
