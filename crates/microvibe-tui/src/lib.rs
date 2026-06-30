@@ -45,6 +45,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 const INPUT_GRACE_PERIOD: Duration = Duration::from_millis(500);
+const QUEUE_HEADER_LABEL: &str = "» Queued";
+const QUEUE_HEADER_PAUSED_LABEL: &str = "» Queued — press Enter to send, type to add";
 
 pub async fn run(config: Config) -> Result<()> {
     run_with_initial_prompt(config, None).await
@@ -60,7 +62,7 @@ pub async fn run_with_initial_prompt(config: Config, initial_prompt: Option<Stri
         DisableModifyOtherKeys,
         PushKeyboardEnhancementFlags(keyboard_enhancement_flags())
     )?;
-    if tmux_should_enable_modify_other_keys() {
+    if should_enable_modify_other_keys() {
         execute!(stdout, EnableModifyOtherKeys)?;
     }
     let backend = CrosstermBackend::new(stdout);
@@ -152,8 +154,12 @@ impl CrosstermCommand for EnableModifyOtherKeys {
     }
 }
 
-fn tmux_should_enable_modify_other_keys() -> bool {
-    tmux_should_enable_modify_other_keys_for(
+fn should_enable_modify_other_keys() -> bool {
+    should_enable_modify_other_keys_for(
+        ghostty_session_detected(
+            std::env::var("TERM_PROGRAM").ok().as_deref(),
+            std::env::var("TERM").ok().as_deref(),
+        ),
         tmux_session_detected(
             std::env::var("TMUX").ok().as_deref(),
             std::env::var("TMUX_PANE").ok().as_deref(),
@@ -162,15 +168,21 @@ fn tmux_should_enable_modify_other_keys() -> bool {
     )
 }
 
+fn ghostty_session_detected(term_program: Option<&str>, term: Option<&str>) -> bool {
+    term_program.is_some_and(|value| value.eq_ignore_ascii_case("ghostty"))
+        || term.is_some_and(|value| value.contains("ghostty"))
+}
+
 fn tmux_session_detected(tmux: Option<&str>, tmux_pane: Option<&str>) -> bool {
     tmux.is_some() || tmux_pane.is_some()
 }
 
-fn tmux_should_enable_modify_other_keys_for(
+fn should_enable_modify_other_keys_for(
+    running_in_ghostty: bool,
     running_in_tmux_session: bool,
     extended_keys_format: Option<&str>,
 ) -> bool {
-    running_in_tmux_session && matches!(extended_keys_format, Some("csi-u"))
+    running_in_ghostty || running_in_tmux_session && matches!(extended_keys_format, Some("csi-u"))
 }
 
 fn read_tmux_extended_keys_format() -> Option<String> {
@@ -309,6 +321,7 @@ async fn run_inner(
     let mut scheduled_loops: Vec<ScheduledLoop> = Vec::new();
     let mut active_key_modifiers = KeyModifiers::empty();
     let mut queued_inputs: VecDeque<String> = VecDeque::new();
+    let mut queued_inputs_paused = false;
     let mut running_bash: Option<RunningManualBash> = None;
 
     if let Some(submitted) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
@@ -444,9 +457,15 @@ async fn run_inner(
         if running_turn.is_none()
             && running_bash.is_none()
             && bottom_panel.is_none()
+            && !queued_inputs_paused
             && let Some(submitted) = queued_inputs.pop_front()
         {
-            remove_queued_input_lines(&mut transcript, &submitted, queued_inputs.is_empty());
+            remove_queued_input_lines(
+                &mut transcript,
+                &submitted,
+                queued_inputs.is_empty(),
+                queued_inputs_paused,
+            );
             if let Some(shell_command) = submitted.strip_prefix('!') {
                 clear_initializing(&mut transcript);
                 set_single_trailing_blank(&mut transcript);
@@ -627,6 +646,32 @@ async fn run_inner(
                         apply_panel_exit(&mut transcript, &panel);
                         continue;
                     }
+                    if let Some(running) = running_bash.take() {
+                        running.handle.abort();
+                        finish_manual_bash(
+                            &mut transcript,
+                            session.as_mut(),
+                            &config,
+                            running.command,
+                            running.cwd,
+                            manual_bash_interrupted_result(),
+                        )
+                        .await;
+                        if !queued_inputs.is_empty() {
+                            queued_inputs_paused = true;
+                            set_queued_input_paused(&mut transcript, true);
+                        }
+                        quit_confirmation = None;
+                        continue;
+                    }
+                    if (running_turn.is_some() || running_bash.is_some())
+                        && !queued_inputs.is_empty()
+                    {
+                        queued_inputs_paused = true;
+                        set_queued_input_paused(&mut transcript, true);
+                        quit_confirmation = None;
+                        continue;
+                    }
                     if input.is_empty() {
                         break;
                     }
@@ -652,7 +697,11 @@ async fn run_inner(
                             &mut transcript,
                             &removed,
                             queued_inputs.is_empty(),
+                            queued_inputs_paused,
                         );
+                        if queued_inputs.is_empty() {
+                            queued_inputs_paused = false;
+                        }
                         quit_confirmation = None;
                         continue;
                     }
@@ -1257,8 +1306,33 @@ async fn run_inner(
                         }
                         continue;
                     }
+                    let command = input.trim();
+                    if queued_inputs_paused && bottom_panel.is_none() {
+                        if !command.is_empty() {
+                            if command.starts_with('/') || command.starts_with('&') {
+                                continue;
+                            }
+                            let submitted = std::mem::take(&mut input);
+                            input_cursor = 0;
+                            add_input_history(&mut input_history, &submitted);
+                            reset_input_history_navigation(
+                                &mut input_history_index,
+                                &mut input_history_draft,
+                            );
+                            append_queued_input_lines(
+                                &mut transcript,
+                                &mut queued_inputs,
+                                submitted,
+                                true,
+                            );
+                            completion = None;
+                        }
+                        queued_inputs_paused = false;
+                        set_queued_input_paused(&mut transcript, false);
+                        quit_confirmation = None;
+                        continue;
+                    }
                     if running_turn.is_some() || running_bash.is_some() || session.is_none() {
-                        let command = input.trim();
                         if command.is_empty() {
                             continue;
                         }
@@ -1272,7 +1346,12 @@ async fn run_inner(
                             &mut input_history_index,
                             &mut input_history_draft,
                         );
-                        append_queued_input_lines(&mut transcript, &mut queued_inputs, submitted);
+                        append_queued_input_lines(
+                            &mut transcript,
+                            &mut queued_inputs,
+                            submitted,
+                            queued_inputs_paused,
+                        );
                         completion = None;
                         continue;
                     }
@@ -2298,27 +2377,44 @@ async fn finish_manual_bash(
             ));
         let _ = active_session.save().await;
     }
-    transcript.extend(manual_bash_display_lines(&command, &result));
+    insert_before_queue_or_append(transcript, manual_bash_display_lines(&command, &result));
 }
 
 fn append_queued_input_lines(
     transcript: &mut Vec<String>,
     queued_inputs: &mut VecDeque<String>,
     submitted: String,
+    paused: bool,
 ) {
     if queued_inputs.is_empty() {
         set_single_trailing_blank(transcript);
-        transcript.push("» Queued".to_string());
+        transcript.push(queue_header_label(paused).to_string());
+        transcript.push("─".repeat(120));
     }
-    transcript.extend(format_user_prompt_lines(&submitted));
+    transcript.extend(format_queued_input_lines(&submitted));
     queued_inputs.push_back(submitted);
 }
 
-fn remove_queued_input_lines(transcript: &mut Vec<String>, submitted: &str, remove_header: bool) {
-    let lines = format_user_prompt_lines(submitted);
+fn remove_queued_input_lines(
+    transcript: &mut Vec<String>,
+    submitted: &str,
+    remove_header: bool,
+    paused: bool,
+) {
+    let lines = format_queued_input_lines(submitted);
     replace_first_line_sequence(transcript, &lines, &[]);
-    if remove_header && let Some(index) = transcript.iter().position(|line| line == "» Queued") {
+    if remove_header
+        && let Some(index) = transcript
+            .iter()
+            .position(|line| line == queue_header_label(paused))
+    {
         transcript.remove(index);
+        if transcript
+            .get(index)
+            .is_some_and(|line| is_separator_line(line))
+        {
+            transcript.remove(index);
+        }
         while transcript.get(index).is_some_and(|line| line.is_empty())
             && transcript
                 .get(index.saturating_sub(1))
@@ -2326,6 +2422,49 @@ fn remove_queued_input_lines(transcript: &mut Vec<String>, submitted: &str, remo
         {
             transcript.remove(index);
         }
+    }
+}
+
+fn format_queued_input_lines(submitted: &str) -> Vec<String> {
+    if let Some(command) = submitted.strip_prefix('!')
+        && !command.is_empty()
+    {
+        return vec![format!("■ {command}"), String::new()];
+    }
+    format_user_prompt_lines(submitted)
+}
+
+fn insert_before_queue_or_append(transcript: &mut Vec<String>, mut lines: Vec<String>) {
+    let Some(index) = transcript
+        .iter()
+        .position(|line| line == QUEUE_HEADER_LABEL || line == QUEUE_HEADER_PAUSED_LABEL)
+    else {
+        transcript.extend(lines);
+        return;
+    };
+    if lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    transcript.splice(index..index, lines);
+}
+
+fn is_separator_line(line: &str) -> bool {
+    !line.is_empty() && line.chars().all(|ch| ch == '─')
+}
+
+fn set_queued_input_paused(transcript: &mut [String], paused: bool) {
+    let current = queue_header_label(!paused);
+    let replacement = queue_header_label(paused);
+    if let Some(line) = transcript.iter_mut().find(|line| line.as_str() == current) {
+        *line = replacement.to_string();
+    }
+}
+
+fn queue_header_label(paused: bool) -> &'static str {
+    if paused {
+        QUEUE_HEADER_PAUSED_LABEL
+    } else {
+        QUEUE_HEADER_LABEL
     }
 }
 
@@ -4860,6 +4999,15 @@ async fn run_manual_bash_command(command: &str) -> ManualBashResult {
     }
 }
 
+fn manual_bash_interrupted_result() -> ManualBashResult {
+    ManualBashResult {
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: 1,
+        status: Some("interrupted by user".to_string()),
+    }
+}
+
 fn manual_bash_empty_lines() -> Vec<String> {
     vec![
         "  ⎣ Error: No command provided after '!'".to_string(),
@@ -4874,7 +5022,11 @@ fn manual_bash_display_lines(command: &str, result: &ManualBashResult) -> Vec<St
     output.push_str(&result.stdout);
     output.push_str(&result.stderr);
     if output.is_empty() {
-        output.push_str("(no output)");
+        if result.status.as_deref() == Some("interrupted by user") {
+            output.push_str("(interrupted)");
+        } else {
+            output.push_str("(no output)");
+        }
     }
     let output_lines = output.trim_end_matches('\n').lines().collect::<Vec<_>>();
     for (idx, line) in output_lines.iter().enumerate() {
@@ -4919,7 +5071,9 @@ fn manual_bash_context(
     if let Some(status) = &result.status {
         sections.push(format!("Status: {status}"));
     }
-    sections.push(format!("Exit code: {}", result.exit_code));
+    if result.status.is_none() {
+        sections.push(format!("Exit code: {}", result.exit_code));
+    }
     if !result.stdout.is_empty() {
         let stdout = cap_manual_bash_output(&result.stdout, max_output_bytes);
         sections.push(format!("Stdout:\n```text\n{}\n```", stdout.trim_end()));
@@ -6054,24 +6208,35 @@ mod tests {
     }
 
     #[test]
-    fn tmux_modify_other_keys_matches_codex_gate() {
+    fn modify_other_keys_matches_terminal_gate() {
+        assert!(ghostty_session_detected(Some("ghostty"), None));
+        assert!(ghostty_session_detected(None, Some("xterm-ghostty")));
+        assert!(!ghostty_session_detected(
+            Some("Apple_Terminal"),
+            Some("xterm-256color")
+        ));
+
         assert!(!tmux_session_detected(None, None));
         assert!(tmux_session_detected(Some("/tmp/tmux"), None));
         assert!(tmux_session_detected(None, Some("%1")));
 
-        assert!(tmux_should_enable_modify_other_keys_for(
+        assert!(should_enable_modify_other_keys_for(
+            false,
             true,
             Some("csi-u")
         ));
-        assert!(!tmux_should_enable_modify_other_keys_for(
+        assert!(!should_enable_modify_other_keys_for(
+            false,
             true,
             Some("xterm")
         ));
-        assert!(!tmux_should_enable_modify_other_keys_for(true, None));
-        assert!(!tmux_should_enable_modify_other_keys_for(
+        assert!(!should_enable_modify_other_keys_for(false, true, None));
+        assert!(!should_enable_modify_other_keys_for(
+            false,
             false,
             Some("csi-u")
         ));
+        assert!(should_enable_modify_other_keys_for(true, false, None));
     }
 
     #[test]
@@ -6435,25 +6600,61 @@ mod tests {
         let mut transcript = vec!["start".to_string(), String::new()];
         let mut queue = VecDeque::new();
 
-        append_queued_input_lines(&mut transcript, &mut queue, "first".to_string());
-        append_queued_input_lines(&mut transcript, &mut queue, "second line".to_string());
+        append_queued_input_lines(&mut transcript, &mut queue, "first".to_string(), false);
+        append_queued_input_lines(
+            &mut transcript,
+            &mut queue,
+            "second line".to_string(),
+            false,
+        );
 
         assert_eq!(queue.len(), 2);
         assert_eq!(
-            transcript.iter().filter(|line| *line == "» Queued").count(),
+            transcript
+                .iter()
+                .filter(|line| *line == QUEUE_HEADER_LABEL)
+                .count(),
             1
         );
+        assert!(transcript.iter().any(|line| is_separator_line(line)));
         assert!(transcript.contains(&"> first".to_string()));
         assert!(transcript.contains(&"> second line".to_string()));
 
-        remove_queued_input_lines(&mut transcript, "first", false);
-        assert!(transcript.contains(&"» Queued".to_string()));
+        remove_queued_input_lines(&mut transcript, "first", false, false);
+        assert!(transcript.contains(&QUEUE_HEADER_LABEL.to_string()));
         assert!(!transcript.contains(&"> first".to_string()));
         assert!(transcript.contains(&"> second line".to_string()));
 
-        remove_queued_input_lines(&mut transcript, "second line", true);
-        assert!(!transcript.contains(&"» Queued".to_string()));
+        set_queued_input_paused(&mut transcript, true);
+        assert!(transcript.contains(&QUEUE_HEADER_PAUSED_LABEL.to_string()));
+        remove_queued_input_lines(&mut transcript, "second line", true, true);
+        assert!(!transcript.contains(&QUEUE_HEADER_LABEL.to_string()));
+        assert!(!transcript.contains(&QUEUE_HEADER_PAUSED_LABEL.to_string()));
+        assert!(!transcript.iter().any(|line| is_separator_line(line)));
         assert!(!transcript.contains(&"> second line".to_string()));
+    }
+
+    #[test]
+    fn queued_bash_lines_use_pending_bash_marker() {
+        let mut transcript = Vec::new();
+        let mut queue = VecDeque::new();
+
+        append_queued_input_lines(
+            &mut transcript,
+            &mut queue,
+            "!printf queued".to_string(),
+            true,
+        );
+
+        assert!(transcript.contains(&QUEUE_HEADER_PAUSED_LABEL.to_string()));
+        assert!(transcript.contains(&"■ printf queued".to_string()));
+        assert!(!transcript.contains(&"> !printf queued".to_string()));
+
+        remove_queued_input_lines(&mut transcript, "!printf queued", true, true);
+
+        assert!(!transcript.contains(&QUEUE_HEADER_PAUSED_LABEL.to_string()));
+        assert!(!transcript.contains(&"■ printf queued".to_string()));
+        assert!(!transcript.iter().any(|line| is_separator_line(line)));
     }
 
     #[test]
