@@ -145,6 +145,7 @@ Current TUI gates:
 - `tui_shift_delete_right`: prompt editing deletes the character to the right of the cursor.
 - `tui_initial_prompt`: positional `PROMPT` starts the interactive TUI, submits that prompt after startup, and renders the same user/assistant transcript instead of using programmatic mode.
 - `tui_prompt_bash_allow_expand_tool`, `tui_prompt_bash_allow_expand_collapse_tool`: global `Ctrl+O` expands and re-collapses Vibe-style bash tool output sections (`▶ N lines` / `▼ show less`).
+- `tui_approval_grace_enter`: approval panels ignore an immediate accidental Enter during Vibe's initial input grace period.
 - `tui_prompt_read_expand_tool`, `tui_prompt_read_expand_collapse_tool`: global `Ctrl+O` expands and re-collapses Vibe-style `read` output, including stripped line numbers.
 - `tui_prompt_file_tools_expand_tool`: global `Ctrl+O` expands Vibe-style `grep` output after the write/edit/grep tool chain.
 - `tui_prompt_skill_expand_tool`, `tui_prompt_web_fetch_expand_tool`, `tui_prompt_web_search_expand_tool`, `tui_prompt_question_expand_tool`: global `Ctrl+O` expands generic tool result widgets for skill loading, web fetch, web search, and user-question answers.
@@ -165,6 +166,7 @@ Current TUI gates:
 - `tui_prompt_web_fetch`: forced `web_fetch` renders Vibe's URL approval flow and fetch result summary.
 - `tui_prompt_web_search`: forced `web_search` renders Vibe's search approval flow and search result summary against a deterministic fake Mistral Conversations endpoint.
 - `tui_prompt_question`, `tui_prompt_question_other`, `tui_prompt_question_multi`, `tui_prompt_question_multiselect`, `tui_prompt_question_multiselect_other`: `ask_user_question` pauses the turn, renders Vibe's question panel, returns one or multiple selected answers including custom "Other" answers and multi-select answers, and continues the model loop.
+- `tui_question_grace_enter`: question panels ignore an immediate accidental Enter during Vibe's initial input grace period.
 - `tui_prompt_exit_plan_auto`, `tui_prompt_exit_plan_default`, `tui_prompt_exit_plan_no`, `tui_prompt_exit_plan_editor`: in plan mode, `exit_plan_mode` opens Vibe's plan-review confirmation, handles both "Yes" paths and "No", updates the displayed agent mode when switching, renders the review result, supports `Ctrl+G` opening the plan file in the configured editor, and continues the model loop.
 - `tui_teleport_unavailable`, `tui_teleport_ampersand_unavailable`: `/teleport` and `&target` Teleport entrypoints render Vibe's unavailable-subscription error without starting a model turn.
 

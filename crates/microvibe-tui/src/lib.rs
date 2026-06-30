@@ -44,6 +44,8 @@ use tokio::process::Command as TokioCommand;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+const INPUT_GRACE_PERIOD: Duration = Duration::from_millis(500);
+
 pub async fn run(config: Config) -> Result<()> {
     run_with_initial_prompt(config, None).await
 }
@@ -58,6 +60,9 @@ pub async fn run_with_initial_prompt(config: Config, initial_prompt: Option<Stri
         DisableModifyOtherKeys,
         PushKeyboardEnhancementFlags(keyboard_enhancement_flags())
     )?;
+    if tmux_should_enable_modify_other_keys() {
+        execute!(stdout, EnableModifyOtherKeys)?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -123,6 +128,77 @@ impl CrosstermCommand for DisableModifyOtherKeys {
     fn is_ansi_code_supported(&self) -> bool {
         false
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EnableModifyOtherKeys;
+
+impl CrosstermCommand for EnableModifyOtherKeys {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        f.write_str("\x1b[>4;2m")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "modifyOtherKeys enable is not implemented for the legacy Windows API",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        false
+    }
+}
+
+fn tmux_should_enable_modify_other_keys() -> bool {
+    tmux_should_enable_modify_other_keys_for(
+        tmux_session_detected(
+            std::env::var("TMUX").ok().as_deref(),
+            std::env::var("TMUX_PANE").ok().as_deref(),
+        ),
+        read_tmux_extended_keys_format().as_deref(),
+    )
+}
+
+fn tmux_session_detected(tmux: Option<&str>, tmux_pane: Option<&str>) -> bool {
+    tmux.is_some() || tmux_pane.is_some()
+}
+
+fn tmux_should_enable_modify_other_keys_for(
+    running_in_tmux_session: bool,
+    extended_keys_format: Option<&str>,
+) -> bool {
+    running_in_tmux_session && matches!(extended_keys_format, Some("csi-u"))
+}
+
+fn read_tmux_extended_keys_format() -> Option<String> {
+    for args in [
+        ["display-message", "-p", "#{extended-keys-format}"],
+        ["show-options", "-gqv", "extended-keys-format"],
+    ] {
+        let output = Command::new("tmux")
+            .args(args)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            continue;
+        }
+
+        if let Some(value) = String::from_utf8(output.stdout)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value);
+        }
+    }
+
+    None
 }
 
 fn modifier_key_modifier(code: &KeyCode) -> Option<KeyModifiers> {
@@ -468,6 +544,12 @@ async fn run_inner(
                 Event::Key(key) if key.code == KeyCode::Esc => {
                     if completion.is_some() {
                         completion = None;
+                        continue;
+                    }
+                    if bottom_panel
+                        .as_ref()
+                        .is_some_and(BottomPanel::guards_initial_submit)
+                    {
                         continue;
                     }
                     if let Some(panel) = bottom_panel.take() {
@@ -1001,6 +1083,12 @@ async fn run_inner(
                         .as_ref()
                         .is_some_and(|panel| panel.command == "/approval")
                     {
+                        if bottom_panel
+                            .as_ref()
+                            .is_some_and(BottomPanel::guards_initial_submit)
+                        {
+                            continue;
+                        }
                         let decision = bottom_panel
                             .as_ref()
                             .map(approval_decision)
@@ -1013,6 +1101,12 @@ async fn run_inner(
                         .as_ref()
                         .is_some_and(|panel| panel.command == "/question")
                     {
+                        if bottom_panel
+                            .as_ref()
+                            .is_some_and(BottomPanel::guards_initial_submit)
+                        {
+                            continue;
+                        }
                         if let Some(panel) = bottom_panel.as_mut()
                             && let Some(response) = advance_question_panel(panel)
                         {
@@ -1519,6 +1613,12 @@ async fn run_inner(
                             .as_ref()
                             .is_some_and(|panel| panel.command == "/approval") =>
                 {
+                    if bottom_panel
+                        .as_ref()
+                        .is_some_and(BottomPanel::guards_initial_submit)
+                    {
+                        continue;
+                    }
                     respond_pending_turn(
                         &mut running_turn,
                         &mut transcript,
@@ -1532,6 +1632,12 @@ async fn run_inner(
                             .as_ref()
                             .is_some_and(|panel| panel.command == "/approval") =>
                 {
+                    if bottom_panel
+                        .as_ref()
+                        .is_some_and(BottomPanel::guards_initial_submit)
+                    {
+                        continue;
+                    }
                     if let Some(panel) = bottom_panel.as_mut() {
                         select_approval_option(panel, 1);
                     }
@@ -1543,6 +1649,12 @@ async fn run_inner(
                             .as_ref()
                             .is_some_and(|panel| panel.command == "/approval") =>
                 {
+                    if bottom_panel
+                        .as_ref()
+                        .is_some_and(BottomPanel::guards_initial_submit)
+                    {
+                        continue;
+                    }
                     if let Some(panel) = bottom_panel.as_mut() {
                         select_approval_option(panel, 2);
                     }
@@ -1554,6 +1666,12 @@ async fn run_inner(
                             .as_ref()
                             .is_some_and(|panel| panel.command == "/approval") =>
                 {
+                    if bottom_panel
+                        .as_ref()
+                        .is_some_and(BottomPanel::guards_initial_submit)
+                    {
+                        continue;
+                    }
                     respond_pending_turn(
                         &mut running_turn,
                         &mut transcript,
@@ -1567,6 +1685,12 @@ async fn run_inner(
                             .as_ref()
                             .is_some_and(|panel| panel.command == "/question") =>
                 {
+                    if bottom_panel
+                        .as_ref()
+                        .is_some_and(BottomPanel::guards_initial_submit)
+                    {
+                        continue;
+                    }
                     if let Some(panel) = bottom_panel.as_mut() {
                         panel.selected = 0;
                         if let Some(response) = advance_question_panel(panel) {
@@ -1581,6 +1705,12 @@ async fn run_inner(
                             .as_ref()
                             .is_some_and(|panel| panel.command == "/question") =>
                 {
+                    if bottom_panel
+                        .as_ref()
+                        .is_some_and(BottomPanel::guards_initial_submit)
+                    {
+                        continue;
+                    }
                     if let Some(panel) = bottom_panel.as_mut() {
                         panel.selected = 1;
                         if let Some(response) = advance_question_panel(panel) {
@@ -2068,6 +2198,7 @@ struct BottomPanel {
     question_selected_options: Vec<usize>,
     question_other_texts: Vec<String>,
     proxy_values: Vec<String>,
+    mounted_at: Instant,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2237,6 +2368,11 @@ impl BottomPanel {
         }
     }
 
+    fn guards_initial_submit(&self) -> bool {
+        matches!(self.command.as_str(), "/approval" | "/question")
+            && self.mounted_at.elapsed() < INPUT_GRACE_PERIOD
+    }
+
     fn selected_session(&self) -> Option<&SavedSession> {
         self.resume_sessions.get(self.selected)
     }
@@ -2288,6 +2424,7 @@ fn bottom_panel_for_command(
             question_selected_options: Vec::new(),
             question_other_texts: Vec::new(),
             proxy_values: Vec::new(),
+            mounted_at: Instant::now(),
         }),
         "/thinking" => Some(BottomPanel {
             command: "/thinking".to_string(),
@@ -2308,6 +2445,7 @@ fn bottom_panel_for_command(
             question_selected_options: Vec::new(),
             question_other_texts: Vec::new(),
             proxy_values: Vec::new(),
+            mounted_at: Instant::now(),
         }),
         "/theme" => Some(BottomPanel {
             command: "/theme".to_string(),
@@ -2347,6 +2485,7 @@ fn bottom_panel_for_command(
             question_selected_options: Vec::new(),
             question_other_texts: Vec::new(),
             proxy_values: Vec::new(),
+            mounted_at: Instant::now(),
         }),
         "/config" => Some(BottomPanel {
             command: "/config".to_string(),
@@ -2367,6 +2506,7 @@ fn bottom_panel_for_command(
             question_selected_options: Vec::new(),
             question_other_texts: Vec::new(),
             proxy_values: Vec::new(),
+            mounted_at: Instant::now(),
         }),
         "/proxy-setup" => Some(BottomPanel {
             command: "/proxy-setup".to_string(),
@@ -2387,6 +2527,7 @@ fn bottom_panel_for_command(
             question_selected_options: Vec::new(),
             question_other_texts: Vec::new(),
             proxy_values: current_proxy_values(),
+            mounted_at: Instant::now(),
         }),
         "/voice" => Some(BottomPanel {
             command: "/voice".to_string(),
@@ -2412,6 +2553,7 @@ fn bottom_panel_for_command(
             question_selected_options: Vec::new(),
             question_other_texts: Vec::new(),
             proxy_values: Vec::new(),
+            mounted_at: Instant::now(),
         }),
         _ => None,
     }
@@ -2442,6 +2584,7 @@ fn mcp_panel(mcp_index: &McpIndex) -> BottomPanel {
         question_selected_options: Vec::new(),
         question_other_texts: Vec::new(),
         proxy_values: Vec::new(),
+        mounted_at: Instant::now(),
     }
 }
 
@@ -2474,6 +2617,7 @@ fn mcp_detail_panel(mcp_index: &McpIndex, name: &str) -> Option<BottomPanel> {
         question_selected_options: Vec::new(),
         question_other_texts: Vec::new(),
         proxy_values: Vec::new(),
+        mounted_at: Instant::now(),
     })
 }
 
@@ -2892,6 +3036,7 @@ fn resume_panel(sessions: &[microvibe_core::SavedSession]) -> Option<BottomPanel
         question_selected_options: Vec::new(),
         question_other_texts: Vec::new(),
         proxy_values: Vec::new(),
+        mounted_at: Instant::now(),
     })
 }
 
@@ -2967,6 +3112,7 @@ fn rewind_panel_at(messages: &[Message], index: usize) -> Option<BottomPanel> {
         question_selected_options: Vec::new(),
         question_other_texts: Vec::new(),
         proxy_values: Vec::new(),
+        mounted_at: Instant::now(),
     })
 }
 
@@ -5592,6 +5738,7 @@ fn approval_panel(call: &ToolCall) -> BottomPanel {
         question_selected_options: Vec::new(),
         question_other_texts: vec![String::new(); question_count(call)],
         proxy_values: Vec::new(),
+        mounted_at: Instant::now(),
     }
 }
 
@@ -5616,6 +5763,7 @@ fn question_panel(call: &ToolCall) -> BottomPanel {
         question_selected_options: Vec::new(),
         question_other_texts: Vec::new(),
         proxy_values: Vec::new(),
+        mounted_at: Instant::now(),
     }
 }
 
@@ -5721,7 +5869,29 @@ mod tests {
     #[test]
     fn keyboard_reset_commands_match_codex_terminal_contract() {
         assert_eq!(ansi_for(DisableModifyOtherKeys), "\x1b[>4;0m");
+        assert_eq!(ansi_for(EnableModifyOtherKeys), "\x1b[>4;2m");
         assert_eq!(ansi_for(ResetKeyboardEnhancementFlags), "\x1b[<u");
+    }
+
+    #[test]
+    fn tmux_modify_other_keys_matches_codex_gate() {
+        assert!(!tmux_session_detected(None, None));
+        assert!(tmux_session_detected(Some("/tmp/tmux"), None));
+        assert!(tmux_session_detected(None, Some("%1")));
+
+        assert!(tmux_should_enable_modify_other_keys_for(
+            true,
+            Some("csi-u")
+        ));
+        assert!(!tmux_should_enable_modify_other_keys_for(
+            true,
+            Some("xterm")
+        ));
+        assert!(!tmux_should_enable_modify_other_keys_for(true, None));
+        assert!(!tmux_should_enable_modify_other_keys_for(
+            false,
+            Some("csi-u")
+        ));
     }
 
     #[test]
@@ -5765,6 +5935,32 @@ mod tests {
             KeyCode::Char('c'),
             KeyModifiers::CONTROL,
         )));
+    }
+
+    #[test]
+    fn approval_and_question_panels_guard_initial_submit_like_vibe() {
+        let approval_call = ToolCall::new("bash", json!({"command": "printf parity"}));
+        let mut approval = approval_panel(&approval_call);
+        assert!(approval.guards_initial_submit());
+        approval.mounted_at = Instant::now() - INPUT_GRACE_PERIOD - Duration::from_millis(1);
+        assert!(!approval.guards_initial_submit());
+
+        let question_call = ToolCall::new(
+            "ask_user_question",
+            json!({
+                "questions": [{
+                    "question": "Choose?",
+                    "options": [{"label": "A"}, {"label": "B"}]
+                }]
+            }),
+        );
+        let mut question = question_panel(&question_call);
+        assert!(question.guards_initial_submit());
+        question.mounted_at = Instant::now() - INPUT_GRACE_PERIOD - Duration::from_millis(1);
+        assert!(!question.guards_initial_submit());
+
+        let mcp = mcp_panel(&McpIndex::default());
+        assert!(!mcp.guards_initial_submit());
     }
 
     #[test]
