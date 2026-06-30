@@ -528,7 +528,10 @@ async fn run_inner(
             let bottom_height = bottom_panel
                 .as_ref()
                 .map(BottomPanel::height)
-                .unwrap_or_else(|| input_panel_height(completion.as_ref()).min(main_area.height));
+                .unwrap_or_else(|| {
+                    input_panel_height(completion.as_ref(), &input, main_area.width)
+                        .min(main_area.height)
+                });
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Min(1), Constraint::Length(bottom_height)])
@@ -1980,11 +1983,17 @@ const VIBE_FOREGROUND: Color = Color::Rgb(197, 200, 198);
 const VIBE_SECONDARY: Color = Color::Rgb(104, 160, 179);
 const VIBE_MUTED: Color = Color::Rgb(134, 136, 135);
 
-fn input_panel_height(completion: Option<&CompletionSet>) -> u16 {
+fn input_panel_height(completion: Option<&CompletionSet>, input: &str, panel_width: u16) -> u16 {
     let visible = completion
         .map(|completion| completion.items.len().min(MAX_VISIBLE_COMPLETIONS))
         .unwrap_or(0);
-    if visible == 0 { 6 } else { visible as u16 + 8 }
+    let input_lines = input_visual_line_count(input, panel_width) as u16;
+    let input_block_height = if input_lines <= 1 { 2 } else { input_lines };
+    if visible == 0 {
+        4 + input_block_height
+    } else {
+        visible as u16 + 6 + input_block_height
+    }
 }
 
 fn input_panel_lines<'a>(
@@ -1997,13 +2006,13 @@ fn input_panel_lines<'a>(
     gap: usize,
 ) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
+    let width = separator.chars().count();
     if let Some(completion) = completion {
         let visible = completion.items.len().min(MAX_VISIBLE_COMPLETIONS);
         let start = completion
             .selected
             .saturating_add(1)
             .saturating_sub(visible);
-        let width = separator.chars().count();
         let content_width = width.saturating_sub(2);
         lines.push(Line::styled(
             format!("┌{}┐", "─".repeat(content_width)),
@@ -2046,17 +2055,30 @@ fn input_panel_lines<'a>(
         mode_line.to_string(),
         Style::default().fg(VIBE_MUTED),
     ));
-    lines.push(Line::from(vec![
-        Span::styled(
-            "> ",
-            Style::default()
-                .fg(VIBE_ORANGE)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(input.to_string(), Style::default().fg(VIBE_FOREGROUND)),
-    ]));
+    let wrapped_input = wrap_input_for_display(input, width);
+    let single_visual_input_line = wrapped_input.len() == 1;
+    for (idx, line) in wrapped_input.into_iter().enumerate() {
+        if idx == 0 {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "> ",
+                    Style::default()
+                        .fg(VIBE_ORANGE)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(line, Style::default().fg(VIBE_FOREGROUND)),
+            ]));
+        } else {
+            lines.push(Line::styled(
+                format!("  {line}"),
+                Style::default().fg(VIBE_FOREGROUND),
+            ));
+        }
+    }
     lines.push(Line::from(""));
-    lines.push(Line::from(" "));
+    if single_visual_input_line {
+        lines.push(Line::from(" "));
+    }
     lines.push(Line::styled(
         separator.to_string(),
         Style::default().fg(VIBE_MUTED),
@@ -2067,6 +2089,66 @@ fn input_panel_lines<'a>(
         Span::styled(status.to_string(), Style::default().fg(VIBE_MUTED)),
     ]));
     lines
+}
+
+fn input_visual_line_count(input: &str, panel_width: u16) -> usize {
+    wrap_input_for_display(input, usize::from(panel_width)).len()
+}
+
+fn input_content_width(panel_width: usize) -> usize {
+    panel_width.saturating_sub(2).max(1)
+}
+
+fn wrap_input_for_display(input: &str, panel_width: usize) -> Vec<String> {
+    let wrap_width = input_content_width(panel_width);
+    let mut out = Vec::new();
+    for logical in input.split('\n') {
+        wrap_input_logical_line(logical, wrap_width, &mut out);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+fn wrap_input_logical_line(line: &str, wrap_width: usize, out: &mut Vec<String>) {
+    if line.is_empty() {
+        out.push(String::new());
+        return;
+    }
+    let mut remaining = line;
+    while remaining.chars().count() > wrap_width {
+        let hard_end = byte_index_after_chars(remaining, wrap_width);
+        if let Some((split, next)) = split_input_line_at_word_boundary(remaining, hard_end) {
+            out.push(split.to_string());
+            remaining = next;
+        } else {
+            out.push(remaining[..hard_end].to_string());
+            remaining = &remaining[hard_end..];
+        }
+    }
+    out.push(remaining.to_string());
+}
+
+fn split_input_line_at_word_boundary(line: &str, hard_end: usize) -> Option<(&str, &str)> {
+    let candidate = &line[..hard_end];
+    let (split, ch) = candidate
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| ch.is_whitespace())?;
+    if split == 0 && ch.is_whitespace() {
+        return None;
+    }
+    let next_start = split + ch.len_utf8();
+    Some((line[..split].trim_end(), line[next_start..].trim_start()))
+}
+
+fn byte_index_after_chars(input: &str, count: usize) -> usize {
+    input
+        .char_indices()
+        .nth(count)
+        .map(|(idx, _)| idx)
+        .unwrap_or(input.len())
 }
 
 fn styled_transcript_rows(text: &str) -> Vec<Line<'static>> {
@@ -2164,20 +2246,29 @@ fn input_cursor_position(
     } else {
         &input[..previous_input_boundary(input, cursor)]
     };
-    let line_offset = before_cursor.chars().filter(|ch| *ch == '\n').count() as u16;
-    let column = before_cursor
-        .rsplit('\n')
-        .next()
-        .unwrap_or_default()
-        .chars()
-        .count() as u16;
-    let x = area.x + 2 + column.min(area.width.saturating_sub(3));
+    let (visual_row, visual_column) = input_visual_cursor_position(before_cursor, area.width);
+    let x = area.x + 2 + (visual_column as u16).min(area.width.saturating_sub(3));
     let y = area
         .y
         .saturating_add(input_line_offset)
-        .saturating_add(line_offset)
+        .saturating_add(visual_row as u16)
         .min(area.y + area.height.saturating_sub(1));
     Position { x, y }
+}
+
+fn input_visual_cursor_position(before_cursor: &str, panel_width: u16) -> (usize, usize) {
+    let wrap_width = input_content_width(usize::from(panel_width));
+    let mut row = 0usize;
+    let mut column = 0usize;
+    for logical in before_cursor.split('\n') {
+        let mut wrapped = Vec::new();
+        wrap_input_logical_line(logical, wrap_width, &mut wrapped);
+        let line_count = wrapped.len().max(1);
+        row += line_count.saturating_sub(1);
+        column = wrapped.last().map(|line| line.chars().count()).unwrap_or(0);
+        row += 1;
+    }
+    (row.saturating_sub(1), column)
 }
 
 fn completion_command_entries() -> Vec<CommandEntry> {
@@ -4435,7 +4526,7 @@ fn prepare_image_attachments(
     }
     if resources.len() > MAX_IMAGES_PER_MESSAGE {
         return Err(vec![format!(
-            "Too many image attachments (got {}, max {MAX_IMAGES_PER_MESSAGE}).",
+            "  ⎣ Error: Too many image attachments (got {}, max {MAX_IMAGES_PER_MESSAGE}).",
             resources.len()
         )]);
     }
@@ -6953,6 +7044,19 @@ mod tests {
 
         let multiline = input_cursor_position(area, None, "abc\nde", "abc\nd".len());
         assert_eq!(multiline, Position::new(13, 22));
+    }
+
+    #[test]
+    fn input_display_wraps_on_word_boundary_like_vibe() {
+        let input = "look @image_0.png @image_1.png";
+        assert_eq!(
+            wrap_input_for_display(input, 20),
+            vec!["look @image_0.png", "@image_1.png"]
+        );
+
+        let area = Rect::new(10, 20, 20, 8);
+        let position = input_cursor_position(area, None, input, input.len());
+        assert_eq!(position, Position::new(24, 22));
     }
 
     #[test]
