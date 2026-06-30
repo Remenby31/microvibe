@@ -31,7 +31,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use sha1::Digest;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
@@ -308,11 +308,12 @@ async fn run_inner(
     let mut last_assistant_text: Option<String> = None;
     let mut scheduled_loops: Vec<ScheduledLoop> = Vec::new();
     let mut active_key_modifiers = KeyModifiers::empty();
+    let mut queued_inputs: VecDeque<String> = VecDeque::new();
 
     if let Some(submitted) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
         add_input_history(&mut input_history, &submitted);
         clear_initializing(&mut transcript);
-        if let Some(mut active_session) = session.take() {
+        if let Some(active_session) = session.take() {
             match build_turn_payload(&submitted, &config, &active_session.store.session_dir) {
                 Ok(payload) => {
                     transcript.extend(format_user_prompt_lines_with_images(
@@ -324,26 +325,14 @@ async fn run_inner(
                     let tx_turn = tx.clone();
                     let approval_tx_turn = approval_tx.clone();
                     let question_tx_turn = question_tx.clone();
-                    running_turn = Some(RunningTurn {
-                        approval: None,
-                        question: None,
-                        queued_decision: None,
-                        queued_question: None,
-                        handle: tokio::spawn(async move {
-                            let result = active_session
-                                .agent
-                                .run_turn_with_interaction_and_images(
-                                    payload.model_input,
-                                    Some(submitted.clone()),
-                                    payload.images,
-                                    tx_turn,
-                                    approval_tx_turn,
-                                    question_tx_turn,
-                                )
-                                .await;
-                            (active_session, result)
-                        }),
-                    });
+                    running_turn = Some(spawn_agent_turn(
+                        active_session,
+                        submitted,
+                        payload,
+                        tx_turn,
+                        approval_tx_turn,
+                        question_tx_turn,
+                    ));
                 }
                 Err(lines) => {
                     set_single_trailing_blank(&mut transcript);
@@ -425,6 +414,68 @@ async fn run_inner(
                 }
                 Err(error) => {
                     transcript.push(format!("error: agent task failed: {error}"));
+                }
+            }
+        }
+        if running_turn.is_none()
+            && bottom_panel.is_none()
+            && let Some(submitted) = queued_inputs.pop_front()
+        {
+            remove_queued_input_lines(&mut transcript, &submitted, queued_inputs.is_empty());
+            if let Some(shell_command) = submitted.strip_prefix('!') {
+                clear_initializing(&mut transcript);
+                set_single_trailing_blank(&mut transcript);
+                if shell_command.is_empty() {
+                    transcript.extend(manual_bash_empty_lines());
+                } else {
+                    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    let result = run_manual_bash_command(shell_command).await;
+                    if let Some(active_session) = session.as_mut() {
+                        active_session
+                            .agent
+                            .inject_user_context(manual_bash_context(
+                                shell_command,
+                                &cwd,
+                                &result,
+                                bash_max_output_bytes(&config),
+                            ));
+                        let _ = active_session.save().await;
+                    }
+                    transcript.extend(manual_bash_display_lines(shell_command, &result));
+                }
+            } else {
+                let visible_input =
+                    expand_skill_prompt(&submitted).unwrap_or_else(|| submitted.clone());
+                clear_initializing(&mut transcript);
+                if let Some(active_session) = session.take() {
+                    match build_turn_payload(
+                        &visible_input,
+                        &config,
+                        &active_session.store.session_dir,
+                    ) {
+                        Ok(payload) => {
+                            transcript.extend(format_user_prompt_lines_with_images(
+                                &visible_input,
+                                &payload.images,
+                            ));
+                            transcript.push("─".repeat(120));
+                            transcript.push(String::new());
+                            running_turn = Some(spawn_agent_turn(
+                                active_session,
+                                visible_input,
+                                payload,
+                                tx.clone(),
+                                approval_tx.clone(),
+                                question_tx.clone(),
+                            ));
+                        }
+                        Err(lines) => {
+                            set_single_trailing_blank(&mut transcript);
+                            transcript.extend(lines);
+                            transcript.push(String::new());
+                            session = Some(active_session);
+                        }
+                    }
                 }
             }
         }
@@ -1185,6 +1236,25 @@ async fn run_inner(
                         }
                         continue;
                     }
+                    if running_turn.is_some() || session.is_none() {
+                        let command = input.trim();
+                        if command.is_empty() {
+                            continue;
+                        }
+                        if command.starts_with('/') || command.starts_with('&') {
+                            continue;
+                        }
+                        let submitted = std::mem::take(&mut input);
+                        input_cursor = 0;
+                        add_input_history(&mut input_history, &submitted);
+                        reset_input_history_navigation(
+                            &mut input_history_index,
+                            &mut input_history_draft,
+                        );
+                        append_queued_input_lines(&mut transcript, &mut queued_inputs, submitted);
+                        completion = None;
+                        continue;
+                    }
                     let submitted = std::mem::take(&mut input);
                     input_cursor = 0;
                     let command = submitted.trim();
@@ -1387,7 +1457,7 @@ async fn run_inner(
                         continue;
                     }
                     clear_initializing(&mut transcript);
-                    if let Some(mut active_session) = session.take() {
+                    if let Some(active_session) = session.take() {
                         match build_turn_payload(
                             &visible_input,
                             &config,
@@ -1403,26 +1473,14 @@ async fn run_inner(
                                 let tx_turn = tx.clone();
                                 let approval_tx_turn = approval_tx.clone();
                                 let question_tx_turn = question_tx.clone();
-                                running_turn = Some(RunningTurn {
-                                    approval: None,
-                                    question: None,
-                                    queued_decision: None,
-                                    queued_question: None,
-                                    handle: tokio::spawn(async move {
-                                        let result = active_session
-                                            .agent
-                                            .run_turn_with_interaction_and_images(
-                                                payload.model_input,
-                                                Some(visible_input.clone()),
-                                                payload.images,
-                                                tx_turn,
-                                                approval_tx_turn,
-                                                question_tx_turn,
-                                            )
-                                            .await;
-                                        (active_session, result)
-                                    }),
-                                });
+                                running_turn = Some(spawn_agent_turn(
+                                    active_session,
+                                    visible_input,
+                                    payload,
+                                    tx_turn,
+                                    approval_tx_turn,
+                                    question_tx_turn,
+                                ));
                             }
                             Err(lines) => {
                                 set_single_trailing_blank(&mut transcript);
@@ -2165,6 +2223,64 @@ struct RunningTurn {
     question: Option<QuestionRequest>,
     queued_decision: Option<ApprovalDecision>,
     queued_question: Option<QuestionResponse>,
+}
+
+fn spawn_agent_turn(
+    mut active_session: Session,
+    visible_input: String,
+    payload: TurnPayload,
+    tx_turn: mpsc::UnboundedSender<AgentEvent>,
+    approval_tx_turn: mpsc::UnboundedSender<ApprovalRequest>,
+    question_tx_turn: mpsc::UnboundedSender<QuestionRequest>,
+) -> RunningTurn {
+    RunningTurn {
+        approval: None,
+        question: None,
+        queued_decision: None,
+        queued_question: None,
+        handle: tokio::spawn(async move {
+            let result = active_session
+                .agent
+                .run_turn_with_interaction_and_images(
+                    payload.model_input,
+                    Some(visible_input),
+                    payload.images,
+                    tx_turn,
+                    approval_tx_turn,
+                    question_tx_turn,
+                )
+                .await;
+            (active_session, result)
+        }),
+    }
+}
+
+fn append_queued_input_lines(
+    transcript: &mut Vec<String>,
+    queued_inputs: &mut VecDeque<String>,
+    submitted: String,
+) {
+    if queued_inputs.is_empty() {
+        set_single_trailing_blank(transcript);
+        transcript.push("» Queued".to_string());
+    }
+    transcript.extend(format_user_prompt_lines(&submitted));
+    queued_inputs.push_back(submitted);
+}
+
+fn remove_queued_input_lines(transcript: &mut Vec<String>, submitted: &str, remove_header: bool) {
+    let lines = format_user_prompt_lines(submitted);
+    replace_first_line_sequence(transcript, &lines, &[]);
+    if remove_header && let Some(index) = transcript.iter().position(|line| line == "» Queued") {
+        transcript.remove(index);
+        while transcript.get(index).is_some_and(|line| line.is_empty())
+            && transcript
+                .get(index.saturating_sub(1))
+                .is_some_and(|line| line.is_empty())
+        {
+            transcript.remove(index);
+        }
+    }
 }
 
 const PROXY_VARS: [(&str, &str); 6] = [
@@ -6266,6 +6382,32 @@ mod tests {
 
         assert!(context.contains("Stdout:\n```text\nshort\n```"));
         assert!(!context.contains("[truncated]"));
+    }
+
+    #[test]
+    fn queued_input_lines_keep_header_until_queue_drains() {
+        let mut transcript = vec!["start".to_string(), String::new()];
+        let mut queue = VecDeque::new();
+
+        append_queued_input_lines(&mut transcript, &mut queue, "first".to_string());
+        append_queued_input_lines(&mut transcript, &mut queue, "second line".to_string());
+
+        assert_eq!(queue.len(), 2);
+        assert_eq!(
+            transcript.iter().filter(|line| *line == "» Queued").count(),
+            1
+        );
+        assert!(transcript.contains(&"> first".to_string()));
+        assert!(transcript.contains(&"> second line".to_string()));
+
+        remove_queued_input_lines(&mut transcript, "first", false);
+        assert!(transcript.contains(&"» Queued".to_string()));
+        assert!(!transcript.contains(&"> first".to_string()));
+        assert!(transcript.contains(&"> second line".to_string()));
+
+        remove_queued_input_lines(&mut transcript, "second line", true);
+        assert!(!transcript.contains(&"» Queued".to_string()));
+        assert!(!transcript.contains(&"> second line".to_string()));
     }
 
     #[test]

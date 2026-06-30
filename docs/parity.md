@@ -151,6 +151,7 @@ Current TUI gates:
 - `tui_prompt_skill_expand_tool`, `tui_prompt_web_fetch_expand_tool`, `tui_prompt_web_search_expand_tool`, `tui_prompt_question_expand_tool`: global `Ctrl+O` expands generic tool result widgets for skill loading, web fetch, web search, and user-question answers.
 - `tui_prompt_bash_allow_y`, `tui_prompt_bash_deny_n`: approval `y`/`n` bindings immediately accept or reject, matching Vibe's approval app shortcuts.
 - `tui_prompt_history_up`, `tui_prompt_history_up_down`, `tui_prompt_history_persisted`: prompt history navigation reloads the latest submitted prompt with `Up`, returns to the draft with `Down`, and persists entries across TUI launches via `VIBE_HOME/vibehistory`; the parity harness also compares the exact `vibehistory` file contents.
+- `tui_prompt_queue_during_turn`: prompts submitted while an agent turn is still running are queued, shown under Vibe's queued-message header, and drained FIFO into a follow-up model turn.
 - `tui_prompt_multiline_ctrl_j`: `Ctrl+J` is handled as Vibe's multiline-input binding and does not leak a literal `j` into the prompt display.
 - `tui_prompt_at_file`: TUI `@path` mentions keep the raw visible user prompt while sending Vibe's model-facing resource embedding for small text files.
 - `tui_prompt_at_folder`: TUI `@path` mentions for folders keep the raw visible user prompt while sending Vibe's model-facing resource link.
