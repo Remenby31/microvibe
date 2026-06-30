@@ -12,6 +12,7 @@ use crossterm::event::{
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
+use crossterm::style::force_color_output;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use microvibe_config::{Config, McpServerConfig};
 use microvibe_core::{
@@ -46,6 +47,7 @@ pub async fn run(config: Config) -> Result<()> {
 }
 
 pub async fn run_with_initial_prompt(config: Config, initial_prompt: Option<String>) -> Result<()> {
+    force_color_output(true);
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(

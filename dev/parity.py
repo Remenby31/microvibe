@@ -1152,8 +1152,7 @@ def isolated_env(label: str, base: pathlib.Path) -> dict[str, str]:
             "UV_PYTHON_INSTALL_DIR": str(OUT_DIR / "uv-python"),
         }
     )
-    if "NO_COLOR" in env:
-        env["NO_COLOR"] = env["NO_COLOR"]
+    env.pop("NO_COLOR", None)
     return env
 
 

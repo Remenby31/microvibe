@@ -52,6 +52,7 @@ def main() -> int:
             "dev/parity.py",
             "dev/sitecustomize.py",
             "dev/check_parity_inventory.py",
+            "dev/check_tui_visual_contract.py",
             "dev/extract_mistral_inventory.py",
             "dev/quick_check.py",
         ],
@@ -73,6 +74,7 @@ def main() -> int:
         run(["dev/check_parity_inventory.py"], env=env)
     if not args.no_smoke:
         run(["dev/parity.py", "--tier", args.smoke_tier, "--jobs", str(args.jobs)], env=env)
+        run(["dev/check_tui_visual_contract.py"], env=env)
     return 0
 
 
