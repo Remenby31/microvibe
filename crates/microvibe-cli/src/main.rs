@@ -1391,8 +1391,13 @@ const BINDINGS: &[BindingSpec] = &[
 ];
 
 fn print_microvibe_inventory() -> Result<()> {
-    let _config =
-        Config::load().unwrap_or_else(|_| Config::init().and_then(|_| Config::load()).unwrap());
+    let _config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => {
+            Config::init()?;
+            Config::load()?
+        }
+    };
     let tools = microvibe_tools::ToolRegistry::with_builtins()
         .specs()
         .into_iter()
