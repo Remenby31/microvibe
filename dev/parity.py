@@ -112,6 +112,8 @@ CASES: dict[str, Case] = {
     "acp_prompt_usage_accumulates": Case("acp_prompt_usage_accumulates", "acp_prompt_usage_accumulates", b"", settle=0.0, timeout=20.0),
     "acp_prompt_usage_cost": Case("acp_prompt_usage_cost", "acp_prompt_usage_cost", b"", settle=0.0, timeout=20.0),
     "acp_prompt_missing_session": Case("acp_prompt_missing_session", "acp_prompt_missing_session", b"", settle=0.0, timeout=10.0),
+    "acp_prompt_resource": Case("acp_prompt_resource", "acp_prompt_resource", b"", settle=0.0, timeout=20.0),
+    "acp_prompt_resource_link": Case("acp_prompt_resource_link", "acp_prompt_resource_link", b"", settle=0.0, timeout=20.0),
     "acp_prompt_image": Case("acp_prompt_image", "acp_prompt_image", b"", settle=0.0, timeout=20.0),
     "acp_prompt_image_wrong_type": Case("acp_prompt_image_wrong_type", "acp_prompt_image_wrong_type", b"", settle=0.0, timeout=10.0),
     "acp_prompt_image_invalid_base64": Case("acp_prompt_image_invalid_base64", "acp_prompt_image_invalid_base64", b"", settle=0.0, timeout=10.0),
@@ -820,6 +822,8 @@ SMOKE_CASES = [
     "acp_prompt_usage_accumulates",
     "acp_prompt_usage_cost",
     "acp_prompt_missing_session",
+    "acp_prompt_resource",
+    "acp_prompt_resource_link",
     "acp_prompt_image",
     "acp_prompt_image_wrong_type",
     "acp_prompt_image_invalid_base64",
@@ -1267,6 +1271,9 @@ class FakeChatHandler(http.server.BaseHTTPRequestHandler):
         if isinstance(response, dict) and response.get("__dynamic_image_echo") is True:
             image_count = count_request_image_urls(request if isinstance(request, dict) else {})
             response = simple_chat_response(f"image-count:{image_count}", prompt_tokens=4, completion_tokens=2)
+        if isinstance(response, dict) and response.get("__dynamic_user_echo") is True:
+            user_text = last_request_user_text(request if isinstance(request, dict) else {})
+            response = simple_chat_response(user_text, prompt_tokens=4, completion_tokens=2)
         if isinstance(response, dict) and "__delay" in response:
             delay = float(response.get("__delay") or 0.0)
             response = {key: value for key, value in response.items() if key != "__delay"}
@@ -1373,6 +1380,32 @@ def count_request_image_urls(request: dict[str, object]) -> int:
             elif block.get("type") == "input_image" and isinstance(block.get("image_url"), str):
                 count += 1
     return count
+
+
+def last_request_user_text(request: dict[str, object]) -> str:
+    raw_messages = request.get("messages")
+    if not isinstance(raw_messages, list):
+        return ""
+    user_text = ""
+    for message in raw_messages:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            user_text = content
+        elif isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, dict):
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+                    elif isinstance(block.get("content"), str):
+                        parts.append(block["content"])
+            user_text = "\n".join(parts)
+    return user_text
 
 
 def simple_chat_response(content: str, *, prompt_tokens: int = 3, completion_tokens: int = 2) -> dict[str, object]:
@@ -4767,6 +4800,51 @@ def acp_prompt_agent_thought_request(session_id: str) -> dict:
     return acp_prompt_request(session_id, "Think then answer")
 
 
+def acp_prompt_resource_request(session_id: str) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "session/prompt",
+        "params": {
+            "sessionId": session_id,
+            "prompt": [
+                {"type": "text", "text": "What does this file do?"},
+                {
+                    "type": "resource",
+                    "resource": {
+                        "uri": "file:///home/my_file.py",
+                        "text": "def hello():\n    print('Hello, world!')",
+                        "mime_type": "text/x-python",
+                    },
+                },
+            ],
+        },
+    }
+
+
+def acp_prompt_resource_link_request(session_id: str) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "session/prompt",
+        "params": {
+            "sessionId": session_id,
+            "prompt": [
+                {"type": "text", "text": "Analyze this resource"},
+                {
+                    "type": "resource_link",
+                    "uri": "file:///home/document.pdf",
+                    "name": "document.pdf",
+                    "title": "Important Document",
+                    "description": "A PDF document containing project specifications",
+                    "mime_type": "application/pdf",
+                    "size": 1024,
+                },
+            ],
+        },
+    }
+
+
 def acp_prompt_image_request(
     session_id: str,
     *,
@@ -5879,6 +5957,14 @@ def run_acp_prompt_client_message_id(binary: list[str], env: dict[str, str], cwd
 
 def run_acp_prompt_agent_thought(binary: list[str], env: dict[str, str], cwd: pathlib.Path, workspace: pathlib.Path) -> bytes:
     return run_acp_prompt_request(binary, env, cwd, workspace, acp_prompt_agent_thought_request)
+
+
+def run_acp_prompt_resource(binary: list[str], env: dict[str, str], cwd: pathlib.Path, workspace: pathlib.Path) -> bytes:
+    return run_acp_prompt_request(binary, env, cwd, workspace, acp_prompt_resource_request)
+
+
+def run_acp_prompt_resource_link(binary: list[str], env: dict[str, str], cwd: pathlib.Path, workspace: pathlib.Path) -> bytes:
+    return run_acp_prompt_request(binary, env, cwd, workspace, acp_prompt_resource_link_request)
 
 
 def run_acp_prompt_usage_accumulates(binary: list[str], env: dict[str, str], cwd: pathlib.Path, workspace: pathlib.Path) -> bytes:
@@ -8672,7 +8758,7 @@ def main() -> int:
                 "acp_set_config_empty_id",
             }:
                 write_session_configs(tmp_path, 9, extra_model=True)
-            if case.mode in {"acp_prompt_simple", "acp_prompt_client_message_id", "acp_prompt_agent_thought", "acp_prompt_usage_accumulates", "acp_prompt_usage_cost", "acp_prompt_image", "acp_prompt_image_wrong_type", "acp_prompt_image_invalid_base64", "acp_prompt_image_too_many", "acp_prompt_image_too_large", "acp_command_help", "acp_command_reload", "acp_command_compact_empty", "acp_command_compact_one", "acp_command_teleport_no_history", "acp_command_data_retention", "acp_command_proxy_help", "acp_command_proxy_set", "acp_command_proxy_unset", "acp_command_proxy_invalid", "acp_command_proxy_case", "acp_prompt_grep", "acp_permission_grep_allow", "acp_permission_grep_deny", "acp_permission_grep_cancelled", "acp_permission_grep_allow_always", "acp_permission_grep_allow_always_permanent", "acp_permission_bash_granular", "acp_permission_bash_granular_allow_always_permanent", "acp_fs_read", "acp_fs_read_range", "acp_fs_write", "acp_fs_edit", "acp_terminal_bash_allow", "acp_terminal_bash_nonzero", "acp_terminal_bash_none_exit", "acp_terminal_bash_timeout", "acp_tool_meta_web_fetch", "acp_tool_meta_web_search", "acp_tool_meta_skill", "acp_tool_meta_task", "acp_prompt_todo", "acp_prompt_todo_invalid", "acp_fork_from_prompt_message", "acp_user_display_content"}:
+            if case.mode in {"acp_prompt_simple", "acp_prompt_client_message_id", "acp_prompt_agent_thought", "acp_prompt_usage_accumulates", "acp_prompt_usage_cost", "acp_prompt_resource", "acp_prompt_resource_link", "acp_prompt_image", "acp_prompt_image_wrong_type", "acp_prompt_image_invalid_base64", "acp_prompt_image_too_many", "acp_prompt_image_too_large", "acp_command_help", "acp_command_reload", "acp_command_compact_empty", "acp_command_compact_one", "acp_command_teleport_no_history", "acp_command_data_retention", "acp_command_proxy_help", "acp_command_proxy_set", "acp_command_proxy_unset", "acp_command_proxy_invalid", "acp_command_proxy_case", "acp_prompt_grep", "acp_permission_grep_allow", "acp_permission_grep_deny", "acp_permission_grep_cancelled", "acp_permission_grep_allow_always", "acp_permission_grep_allow_always_permanent", "acp_permission_bash_granular", "acp_permission_bash_granular_allow_always_permanent", "acp_fs_read", "acp_fs_read_range", "acp_fs_write", "acp_fs_edit", "acp_terminal_bash_allow", "acp_terminal_bash_nonzero", "acp_terminal_bash_none_exit", "acp_terminal_bash_timeout", "acp_tool_meta_web_fetch", "acp_tool_meta_web_search", "acp_tool_meta_skill", "acp_tool_meta_task", "acp_prompt_todo", "acp_prompt_todo_invalid", "acp_fork_from_prompt_message", "acp_user_display_content"}:
                 with ThreadingTCPServer(("127.0.0.1", 0), FakeChatHandler) as server:
                     port = int(server.server_address[1])
                     vibe_env["VIBE_PARITY_MISTRAL_SERVER_URL"] = f"http://127.0.0.1:{port}"
@@ -9146,6 +9232,8 @@ def main() -> int:
                                 "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
                             },
                         ]
+                    elif case.mode in {"acp_prompt_resource", "acp_prompt_resource_link"}:
+                        FakeChatHandler.responses = [{"__dynamic_user_echo": True}]
                     elif case.mode == "acp_command_compact_one":
                         FakeChatHandler.responses = [
                             {
@@ -9276,6 +9364,10 @@ def main() -> int:
                         vibe_raw = run_acp_prompt_image_too_many(vibe_acp, vibe_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_image_too_large":
                         vibe_raw = run_acp_prompt_image_too_large(vibe_acp, vibe_env, ROOT, workspace)
+                    elif case.mode == "acp_prompt_resource":
+                        vibe_raw = run_acp_prompt_resource(vibe_acp, vibe_env, ROOT, workspace)
+                    elif case.mode == "acp_prompt_resource_link":
+                        vibe_raw = run_acp_prompt_resource_link(vibe_acp, vibe_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_client_message_id":
                         vibe_raw = run_acp_prompt_client_message_id(vibe_acp, vibe_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_agent_thought":
@@ -9389,6 +9481,10 @@ def main() -> int:
                         micro_raw = run_acp_prompt_image_too_many(microvibe_acp, micro_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_image_too_large":
                         micro_raw = run_acp_prompt_image_too_large(microvibe_acp, micro_env, ROOT, workspace)
+                    elif case.mode == "acp_prompt_resource":
+                        micro_raw = run_acp_prompt_resource(microvibe_acp, micro_env, ROOT, workspace)
+                    elif case.mode == "acp_prompt_resource_link":
+                        micro_raw = run_acp_prompt_resource_link(microvibe_acp, micro_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_client_message_id":
                         micro_raw = run_acp_prompt_client_message_id(microvibe_acp, micro_env, ROOT, workspace)
                     elif case.mode == "acp_prompt_agent_thought":
@@ -9477,7 +9573,7 @@ def main() -> int:
             if case.mode == "acp_delete_loaded_saved":
                 seed_acp_single_saved_session(pathlib.Path(vibe_env["VIBE_HOME"]), "loaddelete-12345678", workspace)
                 seed_acp_single_saved_session(pathlib.Path(micro_env["VIBE_HOME"]), "loaddelete-12345678", workspace)
-            if case.mode in {"acp_prompt_simple", "acp_prompt_client_message_id", "acp_prompt_agent_thought", "acp_prompt_usage_accumulates", "acp_prompt_usage_cost", "acp_prompt_image", "acp_prompt_image_wrong_type", "acp_prompt_image_invalid_base64", "acp_prompt_image_too_many", "acp_prompt_image_too_large", "acp_command_help", "acp_command_reload", "acp_command_compact_empty", "acp_command_compact_one", "acp_command_teleport_no_history", "acp_command_data_retention", "acp_command_proxy_help", "acp_command_proxy_set", "acp_command_proxy_unset", "acp_command_proxy_invalid", "acp_command_proxy_case", "acp_prompt_grep", "acp_permission_grep_allow", "acp_permission_grep_deny", "acp_permission_grep_cancelled", "acp_permission_grep_allow_always", "acp_permission_grep_allow_always_permanent", "acp_permission_bash_granular", "acp_permission_bash_granular_allow_always_permanent", "acp_fs_read", "acp_fs_read_range", "acp_fs_write", "acp_fs_edit", "acp_terminal_bash_allow", "acp_terminal_bash_nonzero", "acp_terminal_bash_none_exit", "acp_terminal_bash_timeout", "acp_tool_meta_web_fetch", "acp_tool_meta_web_search", "acp_tool_meta_skill", "acp_tool_meta_task", "acp_prompt_todo", "acp_prompt_todo_invalid", "acp_fork_from_prompt_message", "acp_user_display_content", "acp_authenticate_browser_complete", "acp_authenticate_browser_unsupported_action", "acp_initialize_delegated_browser_auth", "acp_authenticate_delegated_start", "acp_authenticate_delegated_complete", "acp_authenticate_delegated_missing_attempt", "acp_authenticate_delegated_unknown_attempt", "acp_authenticate_delegated_unsupported_action"}:
+            if case.mode in {"acp_prompt_simple", "acp_prompt_client_message_id", "acp_prompt_agent_thought", "acp_prompt_usage_accumulates", "acp_prompt_usage_cost", "acp_prompt_resource", "acp_prompt_resource_link", "acp_prompt_image", "acp_prompt_image_wrong_type", "acp_prompt_image_invalid_base64", "acp_prompt_image_too_many", "acp_prompt_image_too_large", "acp_command_help", "acp_command_reload", "acp_command_compact_empty", "acp_command_compact_one", "acp_command_teleport_no_history", "acp_command_data_retention", "acp_command_proxy_help", "acp_command_proxy_set", "acp_command_proxy_unset", "acp_command_proxy_invalid", "acp_command_proxy_case", "acp_prompt_grep", "acp_permission_grep_allow", "acp_permission_grep_deny", "acp_permission_grep_cancelled", "acp_permission_grep_allow_always", "acp_permission_grep_allow_always_permanent", "acp_permission_bash_granular", "acp_permission_bash_granular_allow_always_permanent", "acp_fs_read", "acp_fs_read_range", "acp_fs_write", "acp_fs_edit", "acp_terminal_bash_allow", "acp_terminal_bash_nonzero", "acp_terminal_bash_none_exit", "acp_terminal_bash_timeout", "acp_tool_meta_web_fetch", "acp_tool_meta_web_search", "acp_tool_meta_skill", "acp_tool_meta_task", "acp_prompt_todo", "acp_prompt_todo_invalid", "acp_fork_from_prompt_message", "acp_user_display_content", "acp_authenticate_browser_complete", "acp_authenticate_browser_unsupported_action", "acp_initialize_delegated_browser_auth", "acp_authenticate_delegated_start", "acp_authenticate_delegated_complete", "acp_authenticate_delegated_missing_attempt", "acp_authenticate_delegated_unknown_attempt", "acp_authenticate_delegated_unsupported_action"}:
                 pass
             elif case.mode == "acp_initialize":
                 vibe_env.pop("MISTRAL_API_KEY", None)
@@ -10827,6 +10923,8 @@ def main() -> int:
         "acp_prompt_agent_thought",
         "acp_prompt_usage_accumulates",
         "acp_prompt_usage_cost",
+        "acp_prompt_resource",
+        "acp_prompt_resource_link",
         "acp_prompt_image",
         "acp_command_help",
         "acp_command_reload",

@@ -953,7 +953,7 @@ impl AcpServer {
             responses.push(session_update(
                 &session_id,
                 json!({
-                    "title": title_from_prompt(&prompt),
+                    "title": title_from_acp_prompt(raw_prompt, &prompt),
                     "sessionUpdate": "session_info_update",
                 }),
             ));
@@ -1156,7 +1156,7 @@ impl AcpServer {
                 session_update(
                     &session_id,
                     json!({
-                        "title": title_from_prompt(&prompt),
+                        "title": title_from_acp_prompt(raw_prompt, &prompt),
                         "sessionUpdate": "session_info_update",
                     }),
                 ),
@@ -4507,11 +4507,117 @@ fn resource_link_prompt_text(block: &Value) -> String {
 }
 
 fn title_from_prompt(prompt: &str) -> String {
-    let title = prompt.lines().next().unwrap_or_default().trim();
+    format_title_string(prompt.lines().next().unwrap_or_default())
+}
+
+fn title_from_acp_prompt(raw_prompt: &Value, prompt: &str) -> String {
+    let Some(blocks) = raw_prompt.as_array() else {
+        return title_from_prompt(prompt);
+    };
+    let mut parts = Vec::new();
+    for block in blocks {
+        if acp_block_is_automatic(block) {
+            continue;
+        }
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    parts.push(text.to_string());
+                }
+            }
+            Some("resource") => {
+                if let Some(uri) = block
+                    .get("resource")
+                    .and_then(|resource| resource.get("uri"))
+                    .and_then(Value::as_str)
+                    && let Some(mention) = title_mention_from_uri(uri, None)
+                {
+                    parts.push(mention);
+                }
+            }
+            Some("resource_link") => {
+                let uri = block.get("uri").and_then(Value::as_str).unwrap_or_default();
+                let name = block
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty());
+                if let Some(mention) = title_mention_from_uri(uri, name) {
+                    parts.push(mention);
+                }
+            }
+            _ => {}
+        }
+    }
+    let title = format_title_string(&parts.join(""));
     if title.is_empty() {
-        "New chat".to_string()
+        title_from_prompt(prompt)
     } else {
-        title.chars().take(50).collect()
+        title
+    }
+}
+
+fn acp_block_is_automatic(block: &Value) -> bool {
+    block
+        .get("_meta")
+        .or_else(|| block.get("field_meta"))
+        .and_then(|meta| meta.get("automatic"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn title_mention_from_uri(uri: &str, name: Option<&str>) -> Option<String> {
+    let (base_uri, line_range) = parse_title_uri_fragment(uri);
+    let name = name
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| basename_from_uri(&base_uri))?;
+    Some(match line_range {
+        Some((start, Some(end))) => format!("@{name}:{start}-{end}"),
+        Some((start, None)) => format!("@{name}:{start}"),
+        None => format!("@{name}"),
+    })
+}
+
+fn parse_title_uri_fragment(uri: &str) -> (String, Option<(u64, Option<u64>)>) {
+    let Some((base, fragment)) = uri.split_once('#') else {
+        return (uri.to_string(), None);
+    };
+    let Some(rest) = fragment.strip_prefix('L') else {
+        return (uri.to_string(), None);
+    };
+    let (start, end) = if let Some((start, end)) = rest.split_once("-L") {
+        let (Ok(start), Ok(end)) = (start.parse::<u64>(), end.parse::<u64>()) else {
+            return (uri.to_string(), None);
+        };
+        (start, Some(end))
+    } else {
+        let Ok(start) = rest.parse::<u64>() else {
+            return (uri.to_string(), None);
+        };
+        (start, None)
+    };
+    (base.to_string(), Some((start, end)))
+}
+
+fn basename_from_uri(uri: &str) -> Option<String> {
+    let without_fragment = uri.split_once('#').map(|(base, _)| base).unwrap_or(uri);
+    let path = without_fragment
+        .strip_prefix("file://")
+        .unwrap_or(without_fragment);
+    path.rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+fn format_title_string(raw: &str) -> String {
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        "New chat".to_string()
+    } else if collapsed.chars().count() > 50 {
+        format!("{}…", collapsed.chars().take(50).collect::<String>())
+    } else {
+        collapsed
     }
 }
 
@@ -6563,5 +6669,21 @@ mod tests {
             "llamacpp",
             &provider("http://127.0.0.1:8080/v1", "generic", None, None)
         ));
+    }
+
+    #[test]
+    fn acp_titles_render_resource_mentions_like_vibe() {
+        let prompt = json!([
+            {"type": "text", "text": "Look at "},
+            {"type": "resource_link", "uri": "file:///abs/path/foo.py#L9-L27", "name": "foo.py"},
+            {"type": "text", "text": " and "},
+            {"type": "resource", "resource": {"uri": "file:///abs/path/bar.py#L42", "text": "content"}},
+            {"type": "resource_link", "uri": "file:///abs/path/auto.py", "name": "auto.py", "_meta": {"automatic": true}},
+        ]);
+
+        assert_eq!(
+            title_from_acp_prompt(&prompt, "fallback"),
+            "Look at @foo.py:9-27 and @bar.py:42"
+        );
     }
 }
