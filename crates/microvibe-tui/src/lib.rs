@@ -72,6 +72,7 @@ pub async fn run_with_initial_prompt(config: Config, initial_prompt: Option<Stri
 
 fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
         | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
 }
@@ -98,6 +99,24 @@ fn modifier_key_modifier(code: &KeyCode) -> Option<KeyModifiers> {
         }
         _ => None,
     }
+}
+
+fn normalize_key_event(
+    mut key: event::KeyEvent,
+    active_key_modifiers: &mut KeyModifiers,
+) -> Option<event::KeyEvent> {
+    if let Some(modifier) = modifier_key_modifier(&key.code) {
+        match key.kind {
+            KeyEventKind::Press | KeyEventKind::Repeat => active_key_modifiers.insert(modifier),
+            KeyEventKind::Release => active_key_modifiers.remove(modifier),
+        }
+        return None;
+    }
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    key.modifiers |= *active_key_modifiers;
+    Some(key)
 }
 
 async fn run_inner(
@@ -383,21 +402,12 @@ async fn run_inner(
 
         if event::poll(Duration::from_millis(50))? {
             let mut event = event::read()?;
-            if let Event::Key(mut key) = event {
-                if let Some(modifier) = modifier_key_modifier(&key.code) {
-                    match key.kind {
-                        KeyEventKind::Press | KeyEventKind::Repeat => {
-                            active_key_modifiers.insert(modifier);
-                        }
-                        KeyEventKind::Release => active_key_modifiers.remove(modifier),
-                    }
+            if let Event::Key(key) = event {
+                if let Some(key) = normalize_key_event(key, &mut active_key_modifiers) {
+                    event = Event::Key(key);
+                } else {
                     continue;
                 }
-                if key.kind == KeyEventKind::Release {
-                    continue;
-                }
-                key.modifiers |= active_key_modifiers;
-                event = Event::Key(key);
             }
             match event {
                 Event::Key(key) if key.code == KeyCode::Esc => {
@@ -5633,6 +5643,38 @@ fn question_is_multi_select_at(call: &ToolCall, index: usize) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn keyboard_enhancement_flags_request_event_types() {
+        let flags = keyboard_enhancement_flags();
+        assert!(flags.contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_EVENT_TYPES));
+        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES));
+        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS));
+    }
+
+    #[test]
+    fn key_normalization_applies_active_control_to_arrows() {
+        let mut active = KeyModifiers::empty();
+        let ctrl_press = event::KeyEvent::new_with_kind(
+            KeyCode::Modifier(ModifierKeyCode::LeftControl),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Press,
+        );
+        let left = event::KeyEvent::new(KeyCode::Left, KeyModifiers::empty());
+        let ctrl_release = event::KeyEvent::new_with_kind(
+            KeyCode::Modifier(ModifierKeyCode::LeftControl),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Release,
+        );
+
+        assert!(normalize_key_event(ctrl_press, &mut active).is_none());
+        let normalized = normalize_key_event(left, &mut active).unwrap();
+        assert_eq!(normalized.code, KeyCode::Left);
+        assert!(normalized.modifiers.contains(KeyModifiers::CONTROL));
+        assert!(normalize_key_event(ctrl_release, &mut active).is_none());
+        assert!(!active.contains(KeyModifiers::CONTROL));
+    }
 
     #[test]
     fn counts_multi_question_tool_calls() {

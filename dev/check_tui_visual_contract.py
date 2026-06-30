@@ -13,6 +13,8 @@ import pathlib
 import re
 import subprocess
 
+from parity import CSI_RE, Screen
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RAW = ROOT / "target" / "parity" / "default_tui_startup.microvibe.raw"
@@ -27,14 +29,57 @@ EXPECTED_RGB = {
 
 
 def ensure_startup_raw() -> bytes:
-    if not RAW.exists():
-        subprocess.run(["dev/parity.py", "--case", "default_tui_startup"], cwd=ROOT, check=True)
+    subprocess.run(["dev/parity.py", "--case", "default_tui_startup"], cwd=ROOT, check=True)
     return RAW.read_bytes()
 
 
 def require(name: str, condition: bool) -> None:
     if not condition:
         raise SystemExit(f"TUI visual contract failed: {name}")
+
+
+def petit_chat_frames(raw: bytes, rows: int = 36, cols: int = 120) -> list[str]:
+    text = raw.decode("utf-8", "replace")
+    screen = Screen(rows, cols)
+    frames: list[str] = []
+
+    def sample() -> None:
+        lines = screen.text().splitlines()
+        if len(lines) <= 23:
+            return
+        frame = "\n".join(lines[20:23])
+        if not any("\u2800" <= char <= "\u28ff" for char in frame):
+            return
+        if not frames or frames[-1] != frame:
+            frames.append(frame)
+
+    idx = 0
+    while idx < len(text):
+        if text[idx] == "\x1b":
+            csi = CSI_RE.match(text, idx)
+            if csi:
+                raw_params = csi.group(1)
+                private = raw_params[0] if raw_params[:1] in {"?", ">", "=", "<"} else ""
+                params = raw_params[1:] if private else raw_params
+                screen.csi(private, params, csi.group(3))
+                idx = csi.end()
+                sample()
+                continue
+            if text.startswith("\x1b]", idx):
+                end_bel = text.find("\x07", idx)
+                end_st = text.find("\x1b\\", idx)
+                ends = [pos for pos in [end_bel, end_st] if pos != -1]
+                if ends:
+                    end = min(ends)
+                    idx = end + (1 if end == end_bel else 2)
+                    sample()
+                    continue
+            idx += 1
+            continue
+        screen.put(text[idx])
+        idx += 1
+        sample()
+    return frames
 
 
 def main() -> int:
@@ -47,6 +92,9 @@ def main() -> int:
 
     prompt = re.search(rb"\x1b\[1m\x1b\[38;2;255;130;5;49m> ", raw)
     require("prompt marker is not bold orange", prompt is not None)
+
+    frames = petit_chat_frames(raw)
+    require("petit chat banner does not animate", len(frames) >= 3)
 
     print("TUI visual contract OK")
     return 0
