@@ -1016,7 +1016,7 @@ async fn run_inner(
                 }
                 Event::Key(key)
                     if key.code == KeyCode::Left
-                        && key.modifiers.contains(KeyModifiers::SUPER)
+                        && has_command_modifier(key.modifiers)
                         && bottom_panel.is_none() =>
                 {
                     input_cursor = 0;
@@ -1031,7 +1031,7 @@ async fn run_inner(
                 }
                 Event::Key(key)
                     if key.code == KeyCode::Right
-                        && key.modifiers.contains(KeyModifiers::SUPER)
+                        && has_command_modifier(key.modifiers)
                         && bottom_panel.is_none() =>
                 {
                     input_cursor = input.len();
@@ -1615,7 +1615,7 @@ async fn run_inner(
                             continue;
                         }
                     }
-                    if bottom_panel.is_none() && key.modifiers.contains(KeyModifiers::SUPER) {
+                    if bottom_panel.is_none() && has_command_modifier(key.modifiers) {
                         delete_to_line_start(&mut input, &mut input_cursor);
                     } else if bottom_panel.is_none()
                         && key
@@ -1639,7 +1639,7 @@ async fn run_inner(
                     );
                 }
                 Event::Key(key) if key.code == KeyCode::Delete && bottom_panel.is_none() => {
-                    if key.modifiers.contains(KeyModifiers::SUPER) {
+                    if has_command_modifier(key.modifiers) {
                         delete_to_line_end(&mut input, &mut input_cursor);
                     } else if key
                         .modifiers
@@ -2086,6 +2086,10 @@ fn agent_mode_accent(agent: &str) -> Color {
         "auto-approve" => VIBE_ERROR,
         _ => VIBE_MUTED,
     }
+}
+
+fn has_command_modifier(modifiers: KeyModifiers) -> bool {
+    modifiers.intersects(KeyModifiers::SUPER | KeyModifiers::META)
 }
 
 fn input_panel_height(completion: Option<&CompletionSet>, input: &str, panel_width: u16) -> u16 {
@@ -6688,6 +6692,17 @@ mod tests {
         assert!(normalized.modifiers.contains(KeyModifiers::CONTROL));
         assert!(normalize_key_event(ctrl_release, &mut active).is_none());
         assert!(!active.contains(KeyModifiers::CONTROL));
+    }
+
+    #[test]
+    fn command_modifier_accepts_super_and_meta() {
+        assert!(has_command_modifier(KeyModifiers::SUPER));
+        assert!(has_command_modifier(KeyModifiers::META));
+        assert!(has_command_modifier(
+            KeyModifiers::CONTROL | KeyModifiers::META
+        ));
+        assert!(!has_command_modifier(KeyModifiers::CONTROL));
+        assert!(!has_command_modifier(KeyModifiers::ALT));
     }
 
     #[test]
