@@ -1412,6 +1412,10 @@ async fn run_inner(
 
 const QUIT_CONFIRM_DELAY: Duration = Duration::from_secs(1);
 const MAX_VISIBLE_COMPLETIONS: usize = 10;
+const VIBE_ORANGE: Color = Color::Rgb(255, 130, 5);
+const VIBE_FOREGROUND: Color = Color::Rgb(197, 200, 198);
+const VIBE_SECONDARY: Color = Color::Rgb(104, 160, 179);
+const VIBE_MUTED: Color = Color::Rgb(134, 136, 135);
 
 fn input_panel_height(completion: Option<&CompletionSet>) -> u16 {
     let visible = completion
@@ -1440,7 +1444,7 @@ fn input_panel_lines<'a>(
         let content_width = width.saturating_sub(2);
         lines.push(Line::styled(
             format!("┌{}┐", "─".repeat(content_width)),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(VIBE_MUTED),
         ));
         for (idx, item) in completion
             .items
@@ -1463,64 +1467,118 @@ fn input_panel_lines<'a>(
             };
             let style = if idx == completion.selected {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(VIBE_SECONDARY)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(VIBE_FOREGROUND)
             };
             lines.push(Line::styled(format!("│ {row}│"), style));
         }
         lines.push(Line::styled(
             format!("└{}┘", "─".repeat(content_width)),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(VIBE_MUTED),
         ));
     }
     lines.push(Line::styled(
         mode_line.to_string(),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(VIBE_MUTED),
     ));
     lines.push(Line::from(vec![
-        Span::styled("> ", Style::default().fg(Color::Green)),
-        Span::styled(input.to_string(), Style::default().fg(Color::White)),
+        Span::styled(
+            "> ",
+            Style::default()
+                .fg(VIBE_ORANGE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(input.to_string(), Style::default().fg(VIBE_FOREGROUND)),
     ]));
     lines.push(Line::from(""));
     lines.push(Line::from(" "));
     lines.push(Line::styled(
         separator.to_string(),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(VIBE_MUTED),
     ));
     lines.push(Line::from(vec![
-        Span::styled(footer_left, Style::default().fg(Color::Gray)),
+        Span::styled(footer_left, Style::default().fg(VIBE_MUTED)),
         Span::raw(" ".repeat(gap)),
-        Span::styled(status.to_string(), Style::default().fg(Color::DarkGray)),
+        Span::styled(status.to_string(), Style::default().fg(VIBE_MUTED)),
     ]));
     lines
 }
 
 fn styled_transcript_rows(text: &str) -> Vec<Line<'static>> {
-    text.lines()
-        .map(|row| {
-            let style = if row.starts_with(" ⢠") || row.starts_with(" ⢸") || row.starts_with(" ⠈")
-            {
-                Style::default().fg(Color::Magenta)
-            } else if row.starts_with("Mistral Vibe") {
+    text.lines().map(styled_transcript_row).collect()
+}
+
+fn styled_transcript_row(row: &str) -> Line<'static> {
+    if row.starts_with("Mistral Vibe") {
+        return styled_banner_title_row(row);
+    }
+    if row == "Type /help for more information" {
+        return Line::from(vec![
+            Span::styled("Type ".to_string(), Style::default().fg(VIBE_FOREGROUND)),
+            Span::styled("/help".to_string(), Style::default().fg(VIBE_SECONDARY)),
+            Span::styled(
+                " for more information".to_string(),
+                Style::default().fg(VIBE_FOREGROUND),
+            ),
+        ]);
+    }
+    if let Some(prompt) = row.strip_prefix("> ") {
+        return Line::from(vec![
+            Span::styled(
+                "> ".to_string(),
                 Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
-            } else if row.starts_with('>') {
-                Style::default().fg(Color::Cyan)
-            } else if row.starts_with('─') || row.starts_with("  ⎣") {
-                Style::default().fg(Color::DarkGray)
-            } else if row.contains("Initializing") || row.contains("Running ") {
-                Style::default().fg(Color::Yellow)
-            } else if row.contains("Error") || row.contains("error:") {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default().fg(Color::Gray)
-            };
-            Line::styled(row.to_string(), style)
-        })
-        .collect()
+                    .fg(VIBE_ORANGE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(prompt.to_string(), Style::default().fg(VIBE_FOREGROUND)),
+        ]);
+    }
+
+    let style = if row.chars().any(is_braille_char) {
+        Style::default().fg(VIBE_FOREGROUND)
+    } else if row.starts_with('─') || row.starts_with("  ⎣") {
+        Style::default().fg(VIBE_MUTED)
+    } else if row.contains("Initializing") || row.contains("Running ") {
+        Style::default().fg(VIBE_ORANGE)
+    } else if row.contains("Error") || row.contains("error:") {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().fg(VIBE_FOREGROUND)
+    };
+    Line::styled(row.to_string(), style)
+}
+
+fn styled_banner_title_row(row: &str) -> Line<'static> {
+    let Some((prefix, model)) = row.split_once(" · ") else {
+        return Line::styled(
+            row.to_string(),
+            Style::default()
+                .fg(VIBE_ORANGE)
+                .add_modifier(Modifier::BOLD),
+        );
+    };
+    let Some(version) = prefix.strip_prefix("Mistral Vibe ") else {
+        return Line::styled(row.to_string(), Style::default().fg(VIBE_FOREGROUND));
+    };
+    Line::from(vec![
+        Span::styled(
+            "Mistral Vibe".to_string(),
+            Style::default()
+                .fg(VIBE_ORANGE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {version} · "),
+            Style::default().fg(VIBE_FOREGROUND),
+        ),
+        Span::styled(model.to_string(), Style::default().fg(VIBE_SECONDARY)),
+    ])
+}
+
+fn is_braille_char(ch: char) -> bool {
+    ('\u{2800}'..='\u{28ff}').contains(&ch)
 }
 
 fn input_cursor_position(
@@ -2949,10 +3007,253 @@ fn set_single_trailing_blank(transcript: &mut Vec<String>) {
 }
 
 fn animated_transcript(transcript: &[String], frame_tick: usize) -> Vec<String> {
+    let chat = petit_chat_lines(frame_tick);
     transcript
         .iter()
-        .map(|line| animate_spinner_line(line, frame_tick))
+        .enumerate()
+        .map(|(index, line)| {
+            if (STARTUP_TOP_PADDING..STARTUP_TOP_PADDING + PETIT_CHAT_RENDERED_HEIGHT)
+                .contains(&index)
+                && line == PETIT_CHAT_INITIAL_LINES[index - STARTUP_TOP_PADDING]
+            {
+                return chat[index - STARTUP_TOP_PADDING].clone();
+            }
+            animate_spinner_line(line, frame_tick)
+        })
         .collect()
+}
+
+const STARTUP_TOP_PADDING: usize = 20;
+const PETIT_CHAT_WIDTH: usize = 22;
+const PETIT_CHAT_HEIGHT: usize = 12;
+const PETIT_CHAT_RENDERED_HEIGHT: usize = 3;
+const PETIT_CHAT_TICKS_PER_TRANSITION: usize = 3;
+const PETIT_CHAT_INITIAL_LINES: [&str; PETIT_CHAT_RENDERED_HEIGHT] =
+    ["  ⡠⣒⠄  ⡔⢄⠔⡄", " ⢸⠸⣀⡔⢉⠱⣃⡢⣂⡣", "  ⠉⠒⠣⠤⠵⠤⠬⠮⠆"];
+
+const PETIT_CHAT_STARTING_DOTS: &[&[usize]] = &[
+    &[],
+    &[6, 7, 15, 19],
+    &[5, 8, 14, 16, 18, 20],
+    &[4, 6, 7, 14, 17, 20],
+    &[3, 5, 10, 11, 12, 14, 20],
+    &[3, 5, 9, 13, 14, 16, 18, 20],
+    &[3, 5, 8, 13, 17, 21],
+    &[3, 6, 7, 8, 11, 14, 15, 16, 18, 19, 20],
+    &[4, 5, 8, 12, 17, 19],
+    &[6, 7, 8, 13, 18, 20],
+    &[9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+    &[],
+];
+
+const EMPTY: &[(usize, usize)] = &[];
+const BLINK_EYES_HEAD_HIGH_0_REMOVE: &[(usize, usize)] = &[(16, 5), (18, 5)];
+const BLINK_EYES_HEAD_HIGH_0_ADD: &[(usize, usize)] = EMPTY;
+const BLINK_EYES_HEAD_HIGH_1_REMOVE: &[(usize, usize)] = EMPTY;
+const BLINK_EYES_HEAD_HIGH_1_ADD: &[(usize, usize)] = &[(16, 5), (18, 5)];
+const QUEUE_RIGHT_TO_MID_REMOVE: &[(usize, usize)] = &[
+    (6, 1),
+    (7, 1),
+    (8, 2),
+    (4, 3),
+    (6, 3),
+    (7, 3),
+    (4, 8),
+    (5, 8),
+];
+const QUEUE_RIGHT_TO_MID_ADD: &[(usize, usize)] = &[
+    (4, 1),
+    (3, 2),
+    (3, 3),
+    (5, 3),
+    (5, 7),
+    (3, 8),
+    (4, 9),
+    (5, 9),
+];
+const QUEUE_MID_TO_LEFT_REMOVE: &[(usize, usize)] = &[
+    (4, 1),
+    (5, 2),
+    (3, 3),
+    (5, 3),
+    (5, 7),
+    (3, 8),
+    (4, 9),
+    (5, 9),
+];
+const QUEUE_MID_TO_LEFT_ADD: &[(usize, usize)] = &[
+    (1, 1),
+    (2, 1),
+    (0, 2),
+    (1, 3),
+    (2, 3),
+    (4, 3),
+    (4, 8),
+    (5, 8),
+];
+const HEAD_RIGHT_REMOVE: &[(usize, usize)] = &[(16, 5), (18, 5), (17, 6)];
+const HEAD_RIGHT_ADD: &[(usize, usize)] = &[(17, 5), (19, 5), (18, 6)];
+const HEAD_DOWN_REMOVE: &[(usize, usize)] = &[
+    (15, 1),
+    (19, 1),
+    (14, 2),
+    (16, 2),
+    (18, 2),
+    (20, 2),
+    (17, 3),
+    (17, 5),
+    (19, 5),
+    (13, 6),
+    (18, 6),
+    (21, 6),
+    (14, 7),
+    (15, 7),
+    (16, 7),
+    (19, 7),
+    (20, 7),
+];
+const HEAD_DOWN_ADD: &[(usize, usize)] = &[
+    (15, 2),
+    (19, 2),
+    (16, 3),
+    (18, 3),
+    (17, 4),
+    (14, 6),
+    (17, 6),
+    (19, 6),
+    (20, 6),
+    (13, 7),
+    (18, 7),
+    (21, 7),
+    (14, 8),
+    (15, 8),
+    (16, 8),
+    (18, 8),
+    (20, 8),
+];
+const BLINK_EYES_HEAD_LOW_0_REMOVE: &[(usize, usize)] = &[(17, 6), (19, 6)];
+const BLINK_EYES_HEAD_LOW_0_ADD: &[(usize, usize)] = EMPTY;
+const BLINK_EYES_HEAD_LOW_1_REMOVE: &[(usize, usize)] = EMPTY;
+const BLINK_EYES_HEAD_LOW_1_ADD: &[(usize, usize)] = &[(17, 6), (19, 6)];
+const HEAD_UP_REMOVE: &[(usize, usize)] = HEAD_DOWN_ADD;
+const HEAD_UP_ADD: &[(usize, usize)] = &[
+    (15, 1),
+    (19, 1),
+    (14, 2),
+    (16, 2),
+    (18, 2),
+    (20, 2),
+    (17, 3),
+    (17, 5),
+    (19, 5),
+    (13, 6),
+    (18, 6),
+    (21, 6),
+    (14, 7),
+    (15, 7),
+    (16, 7),
+    (18, 7),
+    (19, 7),
+    (20, 7),
+];
+const HEAD_LEFT_REMOVE: &[(usize, usize)] = &[(17, 5), (19, 5), (18, 6)];
+const HEAD_LEFT_ADD: &[(usize, usize)] = &[(16, 5), (18, 5), (17, 6)];
+
+#[derive(Clone, Copy)]
+struct PetitChatTransition {
+    remove: &'static [(usize, usize)],
+    add: &'static [(usize, usize)],
+}
+
+const fn petit_chat_transition(
+    remove: &'static [(usize, usize)],
+    add: &'static [(usize, usize)],
+) -> PetitChatTransition {
+    PetitChatTransition { remove, add }
+}
+
+const PETIT_CHAT_TRANSITIONS: &[PetitChatTransition] = &[
+    petit_chat_transition(BLINK_EYES_HEAD_HIGH_0_REMOVE, BLINK_EYES_HEAD_HIGH_0_ADD),
+    petit_chat_transition(BLINK_EYES_HEAD_HIGH_1_REMOVE, BLINK_EYES_HEAD_HIGH_1_ADD),
+    petit_chat_transition(EMPTY, EMPTY),
+    petit_chat_transition(QUEUE_RIGHT_TO_MID_REMOVE, QUEUE_RIGHT_TO_MID_ADD),
+    petit_chat_transition(HEAD_RIGHT_REMOVE, HEAD_RIGHT_ADD),
+    petit_chat_transition(EMPTY, EMPTY),
+    petit_chat_transition(QUEUE_MID_TO_LEFT_REMOVE, QUEUE_MID_TO_LEFT_ADD),
+    petit_chat_transition(EMPTY, EMPTY),
+    petit_chat_transition(QUEUE_MID_TO_LEFT_ADD, QUEUE_MID_TO_LEFT_REMOVE),
+    petit_chat_transition(EMPTY, EMPTY),
+    petit_chat_transition(HEAD_DOWN_REMOVE, HEAD_DOWN_ADD),
+    petit_chat_transition(EMPTY, EMPTY),
+    petit_chat_transition(QUEUE_RIGHT_TO_MID_ADD, QUEUE_RIGHT_TO_MID_REMOVE),
+    petit_chat_transition(BLINK_EYES_HEAD_LOW_0_REMOVE, BLINK_EYES_HEAD_LOW_0_ADD),
+    petit_chat_transition(BLINK_EYES_HEAD_LOW_1_REMOVE, BLINK_EYES_HEAD_LOW_1_ADD),
+    petit_chat_transition(EMPTY, EMPTY),
+    petit_chat_transition(QUEUE_RIGHT_TO_MID_REMOVE, QUEUE_RIGHT_TO_MID_ADD),
+    petit_chat_transition(EMPTY, EMPTY),
+    petit_chat_transition(QUEUE_MID_TO_LEFT_REMOVE, QUEUE_MID_TO_LEFT_ADD),
+    petit_chat_transition(EMPTY, EMPTY),
+    petit_chat_transition(HEAD_UP_REMOVE, HEAD_UP_ADD),
+    petit_chat_transition(EMPTY, EMPTY),
+    petit_chat_transition(QUEUE_MID_TO_LEFT_ADD, QUEUE_MID_TO_LEFT_REMOVE),
+    petit_chat_transition(HEAD_LEFT_REMOVE, HEAD_LEFT_ADD),
+    petit_chat_transition(EMPTY, EMPTY),
+    petit_chat_transition(QUEUE_RIGHT_TO_MID_ADD, QUEUE_RIGHT_TO_MID_REMOVE),
+];
+
+fn petit_chat_lines(frame_tick: usize) -> Vec<String> {
+    let mut dots: HashSet<(usize, usize)> = PETIT_CHAT_STARTING_DOTS
+        .iter()
+        .enumerate()
+        .flat_map(|(y, row)| row.iter().map(move |x| (*x, y)))
+        .collect();
+    let transition_count = frame_tick / PETIT_CHAT_TICKS_PER_TRANSITION;
+    for transition in PETIT_CHAT_TRANSITIONS
+        .iter()
+        .cycle()
+        .take(transition_count % PETIT_CHAT_TRANSITIONS.len())
+    {
+        for coord in transition.remove {
+            dots.remove(coord);
+        }
+        for coord in transition.add {
+            dots.insert(*coord);
+        }
+    }
+    render_braille(&dots, PETIT_CHAT_WIDTH, PETIT_CHAT_HEIGHT)
+}
+
+fn render_braille(dots: &HashSet<(usize, usize)>, width: usize, height: usize) -> Vec<String> {
+    let rendered_width = width.div_ceil(2);
+    let rendered_height = height.div_ceil(4);
+    let mut lines = Vec::with_capacity(rendered_height);
+    for cell_y in 0..rendered_height {
+        let mut line = String::with_capacity(rendered_width);
+        for cell_x in 0..rendered_width {
+            let mut mask = 0u32;
+            for sub_y in 0..4 {
+                for sub_x in 0..2 {
+                    let x = cell_x * 2 + sub_x;
+                    let y = cell_y * 4 + sub_y;
+                    if dots.contains(&(x, y)) {
+                        let dot_index = braille_dot_index(sub_x, sub_y);
+                        mask += 1 << (dot_index - 1);
+                    }
+                }
+            }
+            line.push(char::from_u32(0x2800 + mask).unwrap_or(' '));
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+fn braille_dot_index(x: usize, y: usize) -> u32 {
+    if y < 3 {
+        (y + 1 + 3 * x) as u32
+    } else {
+        (7 + x) as u32
+    }
 }
 
 fn animate_spinner_line(line: &str, frame_tick: usize) -> String {
@@ -4310,9 +4611,9 @@ fn startup_lines(
     let skill_word = if skill_count == 1 { "skill" } else { "skills" };
     let mut lines = vec![String::new(); 20];
     lines.extend([
-        " ⢠⢢    ⡔⢄⠔⡄".to_string(),
-        " ⢸⢸⣀⡔⢉⠱⣃⡢⣂⡣".to_string(),
-        " ⠈⠒⠒⠣⠤⠵⠤⠬⠮⠆".to_string(),
+        PETIT_CHAT_INITIAL_LINES[0].to_string(),
+        PETIT_CHAT_INITIAL_LINES[1].to_string(),
+        PETIT_CHAT_INITIAL_LINES[2].to_string(),
         String::new(),
         format!("Mistral Vibe v2.17.1 · {model}"),
         format!("{model_count} {model_word} · {mcp_server_summary} · {skill_count} {skill_word}"),
