@@ -7,7 +7,10 @@ use autocomplete::{
 };
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use microvibe_config::{Config, McpServerConfig};
@@ -21,8 +24,8 @@ use microvibe_protocol::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use sha1::Digest;
@@ -45,16 +48,29 @@ pub async fn run(config: Config) -> Result<()> {
 pub async fn run_with_initial_prompt(config: Config, initial_prompt: Option<String>) -> Result<()> {
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        PushKeyboardEnhancementFlags(keyboard_enhancement_flags())
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let result = run_inner(config, initial_prompt, &mut terminal).await;
 
     terminal::disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        PopKeyboardEnhancementFlags,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     result
+}
+
+fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
 }
 
 async fn run_inner(
@@ -276,7 +292,8 @@ async fn run_inner(
                 scroll_offset = 0;
                 display_rows.join("\n")
             };
-            let body = Paragraph::new(visible_transcript).wrap(Wrap { trim: false });
+            let body = Paragraph::new(styled_transcript_rows(&visible_transcript))
+                .wrap(Wrap { trim: false });
             let separator = "─".repeat(chunks[1].width as usize);
             let mode_label = current_agent.as_str();
             let mode_line = format!(
@@ -319,6 +336,14 @@ async fn run_inner(
                 frame.render_widget(Paragraph::new("▅"), marker);
             }
             frame.render_widget(prompt, chunks[1]);
+            if bottom_panel.is_none() {
+                frame.set_cursor_position(input_cursor_position(
+                    chunks[1],
+                    completion.as_ref(),
+                    &input,
+                    input_cursor,
+                ));
+            }
             if let Some(debug_area) = debug_area {
                 frame.render_widget(
                     Paragraph::new(debug_console_text(debug_area.height)),
@@ -329,7 +354,13 @@ async fn run_inner(
         frame_tick = frame_tick.wrapping_add(1);
 
         if event::poll(Duration::from_millis(50))? {
-            match event::read()? {
+            let event = event::read()?;
+            if let Event::Key(key) = &event
+                && key.kind == KeyEventKind::Release
+            {
+                continue;
+            }
+            match event {
                 Event::Key(key) if key.code == KeyCode::Esc => {
                     if completion.is_some() {
                         completion = None;
@@ -484,6 +515,122 @@ async fn run_inner(
                         && key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     // Vibe consumes the voice-recording shortcut even when voice mode is off.
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if key.code == KeyCode::Char('a')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                        && bottom_panel.is_none() =>
+                {
+                    input_cursor = 0;
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if key.code == KeyCode::Char('e')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                        && bottom_panel.is_none() =>
+                {
+                    input_cursor = input.len();
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if key.code == KeyCode::Left
+                        && key.modifiers.contains(KeyModifiers::SUPER)
+                        && bottom_panel.is_none() =>
+                {
+                    input_cursor = 0;
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if key.code == KeyCode::Right
+                        && key.modifiers.contains(KeyModifiers::SUPER)
+                        && bottom_panel.is_none() =>
+                {
+                    input_cursor = input.len();
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key) if key.code == KeyCode::Home && bottom_panel.is_none() => {
+                    input_cursor = 0;
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key) if key.code == KeyCode::End && bottom_panel.is_none() => {
+                    input_cursor = input.len();
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if key.code == KeyCode::Left
+                        && key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                        && bottom_panel.is_none() =>
+                {
+                    input_cursor = previous_word_boundary(&input, input_cursor);
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
+                    quit_confirmation = None;
+                }
+                Event::Key(key)
+                    if key.code == KeyCode::Right
+                        && key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                        && bottom_panel.is_none() =>
+                {
+                    input_cursor = next_word_boundary(&input, input_cursor);
+                    completion = refresh_completion(
+                        true,
+                        &input,
+                        input_cursor,
+                        &completion_entries,
+                        &mut completion_file_indexer,
+                    );
                     quit_confirmation = None;
                 }
                 Event::Key(key)
@@ -1291,8 +1438,17 @@ fn input_panel_lines<'a>(
             .saturating_sub(visible);
         let width = separator.chars().count();
         let content_width = width.saturating_sub(2);
-        lines.push(Line::from(format!("┌{}┐", "─".repeat(content_width))));
-        for item in completion.items.iter().skip(start).take(visible) {
+        lines.push(Line::styled(
+            format!("┌{}┐", "─".repeat(content_width)),
+            Style::default().fg(Color::DarkGray),
+        ));
+        for (idx, item) in completion
+            .items
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(visible)
+        {
             let display_label = item.label.strip_prefix('@').unwrap_or(&item.label);
             let mut text = display_label.to_string();
             if !item.description.is_empty() {
@@ -1305,24 +1461,102 @@ fn input_panel_lines<'a>(
             } else {
                 format!("{text:<row_width$}")
             };
-            lines.push(Line::from(format!("│ {row}│")));
+            let style = if idx == completion.selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            lines.push(Line::styled(format!("│ {row}│"), style));
         }
-        lines.push(Line::from(format!("└{}┘", "─".repeat(content_width))));
+        lines.push(Line::styled(
+            format!("└{}┘", "─".repeat(content_width)),
+            Style::default().fg(Color::DarkGray),
+        ));
     }
-    lines.push(Line::from(mode_line.to_string()));
+    lines.push(Line::styled(
+        mode_line.to_string(),
+        Style::default().fg(Color::DarkGray),
+    ));
     lines.push(Line::from(vec![
-        Span::raw("> "),
-        Span::raw(input.to_string()),
+        Span::styled("> ", Style::default().fg(Color::Green)),
+        Span::styled(input.to_string(), Style::default().fg(Color::White)),
     ]));
     lines.push(Line::from(""));
     lines.push(Line::from(" "));
-    lines.push(Line::from(separator.to_string()));
+    lines.push(Line::styled(
+        separator.to_string(),
+        Style::default().fg(Color::DarkGray),
+    ));
     lines.push(Line::from(vec![
-        Span::styled(footer_left, Style::default().fg(Color::White)),
+        Span::styled(footer_left, Style::default().fg(Color::Gray)),
         Span::raw(" ".repeat(gap)),
-        Span::raw(status.to_string()),
+        Span::styled(status.to_string(), Style::default().fg(Color::DarkGray)),
     ]));
     lines
+}
+
+fn styled_transcript_rows(text: &str) -> Vec<Line<'static>> {
+    text.lines()
+        .map(|row| {
+            let style = if row.starts_with(" ⢠") || row.starts_with(" ⢸") || row.starts_with(" ⠈")
+            {
+                Style::default().fg(Color::Magenta)
+            } else if row.starts_with("Mistral Vibe") {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else if row.starts_with('>') {
+                Style::default().fg(Color::Cyan)
+            } else if row.starts_with('─') || row.starts_with("  ⎣") {
+                Style::default().fg(Color::DarkGray)
+            } else if row.contains("Initializing") || row.contains("Running ") {
+                Style::default().fg(Color::Yellow)
+            } else if row.contains("Error") || row.contains("error:") {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            Line::styled(row.to_string(), style)
+        })
+        .collect()
+}
+
+fn input_cursor_position(
+    area: Rect,
+    completion: Option<&CompletionSet>,
+    input: &str,
+    cursor: usize,
+) -> Position {
+    let visible_completions = completion
+        .map(|completion| completion.items.len().min(MAX_VISIBLE_COMPLETIONS))
+        .unwrap_or(0);
+    let input_line_offset = if visible_completions == 0 {
+        1
+    } else {
+        visible_completions as u16 + 3
+    };
+    let cursor = cursor.min(input.len());
+    let before_cursor = if input.is_char_boundary(cursor) {
+        &input[..cursor]
+    } else {
+        &input[..previous_input_boundary(input, cursor)]
+    };
+    let line_offset = before_cursor.chars().filter(|ch| *ch == '\n').count() as u16;
+    let column = before_cursor
+        .rsplit('\n')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .count() as u16;
+    let x = area.x + 2 + column.min(area.width.saturating_sub(3));
+    let y = area
+        .y
+        .saturating_add(input_line_offset)
+        .saturating_add(line_offset)
+        .min(area.y + area.height.saturating_sub(1));
+    Position { x, y }
 }
 
 fn completion_command_entries() -> Vec<CommandEntry> {
@@ -2661,7 +2895,30 @@ fn panel_lines(
         .saturating_sub(cwd.chars().count())
         .saturating_sub(status.len());
     rows.push(format!("{cwd}{}{status}", " ".repeat(gap)));
-    rows.into_iter().map(Line::from).collect()
+    let row_count = rows.len();
+    rows.into_iter()
+        .enumerate()
+        .map(|(idx, row)| {
+            let style = if idx == 0 || row.starts_with('└') {
+                Style::default().fg(Color::DarkGray)
+            } else if idx == 1 {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else if row.contains('›') {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if row.contains("Error") {
+                Style::default().fg(Color::Red)
+            } else if idx + 1 == row_count {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            Line::styled(row, style)
+        })
+        .collect()
 }
 
 fn panel_row(content: &str, inner: usize) -> String {
@@ -3254,10 +3511,18 @@ fn open_file_in_external_editor(
     };
 
     terminal::disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        PopKeyboardEnhancementFlags,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     let status = Command::new(program).args(args).arg(path).status();
-    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        PushKeyboardEnhancementFlags(keyboard_enhancement_flags())
+    )?;
     terminal::enable_raw_mode()?;
 
     Ok(status.map(|status| status.success()).unwrap_or(false))
@@ -3890,6 +4155,52 @@ fn next_input_boundary(input: &str, cursor: usize) -> usize {
         .next()
         .map(|(offset, _)| cursor + offset)
         .unwrap_or(input.len())
+}
+
+fn previous_word_boundary(input: &str, cursor: usize) -> usize {
+    let mut index = previous_input_boundary(input, cursor);
+    while index > 0 {
+        let Some(ch) = input[..index].chars().next_back() else {
+            break;
+        };
+        if !ch.is_whitespace() {
+            break;
+        }
+        index = previous_input_boundary(input, index);
+    }
+    while index > 0 {
+        let Some(ch) = input[..index].chars().next_back() else {
+            break;
+        };
+        if ch.is_whitespace() {
+            break;
+        }
+        index = previous_input_boundary(input, index);
+    }
+    index
+}
+
+fn next_word_boundary(input: &str, cursor: usize) -> usize {
+    let mut index = next_input_boundary(input, cursor);
+    while index < input.len() {
+        let Some(ch) = input[index..].chars().next() else {
+            break;
+        };
+        if !ch.is_whitespace() {
+            break;
+        }
+        index = next_input_boundary(input, index);
+    }
+    while index < input.len() {
+        let Some(ch) = input[index..].chars().next() else {
+            break;
+        };
+        if ch.is_whitespace() {
+            break;
+        }
+        index = next_input_boundary(input, index);
+    }
+    index
 }
 
 fn input_history_path() -> Option<PathBuf> {
@@ -4963,6 +5274,38 @@ mod tests {
         insert_input_char(&mut input, &mut cursor, 'x');
         assert_eq!(input, "xé");
         assert_eq!(cursor, 1);
+    }
+
+    #[test]
+    fn prompt_word_boundaries_support_modified_arrows() {
+        let input = "alpha  beta gamma";
+
+        assert_eq!(
+            previous_word_boundary(input, input.len()),
+            "alpha  beta ".len()
+        );
+        assert_eq!(
+            previous_word_boundary(input, "alpha  beta ".len()),
+            "alpha  ".len()
+        );
+        assert_eq!(previous_word_boundary(input, "alpha  ".len()), 0);
+
+        assert_eq!(next_word_boundary(input, 0), "alpha".len());
+        assert_eq!(
+            next_word_boundary(input, "alpha".len()),
+            "alpha  beta".len()
+        );
+        assert_eq!(next_word_boundary(input, "alpha  beta".len()), input.len());
+    }
+
+    #[test]
+    fn input_cursor_position_tracks_prompt_text() {
+        let area = Rect::new(10, 20, 80, 6);
+        let position = input_cursor_position(area, None, "abc", 2);
+        assert_eq!(position, Position::new(14, 21));
+
+        let multiline = input_cursor_position(area, None, "abc\nde", "abc\nd".len());
+        assert_eq!(multiline, Position::new(13, 22));
     }
 
     #[test]
