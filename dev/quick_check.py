@@ -55,6 +55,7 @@ def main() -> int:
             "dev/check_parity_artifacts.py",
             "dev/check_tui_visual_contract.py",
             "dev/extract_mistral_inventory.py",
+            "dev/final_check.py",
             "dev/quick_check.py",
         ],
         env=env,

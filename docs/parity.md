@@ -22,6 +22,15 @@ Run the full terminal/programmatic parity matrix:
 dev/parity.py --all
 ```
 
+Run the complete pre-release gate:
+
+```bash
+dev/final_check.py --jobs 32
+```
+
+This runs the smoke pre-flight wrapper, the full parity matrix, the full
+artifact audit, the TUI visual contract, and whitespace checks.
+
 Audit the transcript artifacts from a completed full run:
 
 ```bash
