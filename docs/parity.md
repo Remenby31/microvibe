@@ -29,7 +29,8 @@ dev/final_check.py --jobs 32
 ```
 
 This runs the smoke pre-flight wrapper, the full parity matrix, the full
-artifact audit, the TUI visual contract, and whitespace checks.
+artifact audit, the TUI visual contract, the microvibe TUI input contract, and
+whitespace checks.
 
 Audit the transcript artifacts from a completed full run:
 
@@ -50,7 +51,8 @@ That command runs Rust formatting, Python syntax checks, the Rust workspace
 tests, inventory parity, and the short parity fast tier. The fast tier samples
 CLI, setup, TUI rendering, ACP, tool approval, file/terminal tools, and
 programmatic text/JSON/streaming paths. It also audits the generated transcript
-artifacts for the selected tier. To run the broader pre-final smoke tier:
+artifacts for the selected tier and runs the visual/input TUI contracts. To run
+the broader pre-final smoke tier:
 
 ```bash
 dev/parity.py --tier smoke --jobs 32
@@ -64,6 +66,19 @@ dev/quick_check.py --jobs 32 --smoke-tier smoke
 
 The smoke tier includes ACP prompt/usage/cost, client file/terminal tools,
 programmatic JSON, streaming, hooks, MCP, and task coverage.
+
+Run the microvibe-only TUI input contract:
+
+```bash
+dev/check_tui_input_contract.py
+```
+
+This covers Codex-style terminal line editing that microvibe intentionally
+supports even when upstream Vibe's Textual input widget does not expose the
+same behavior in the PTY parity harness: `Ctrl+Left`, `Ctrl+Right`,
+`Alt+Left`, `Alt+Right`, `Ctrl+U`, and `Ctrl+K`. The strict Vibe parity suite
+still owns behavior that upstream Vibe actually implements for the same PTY
+inputs.
 
 The default full run uses 32 workers. Override it when local iteration needs a different worker count:
 
@@ -162,6 +177,7 @@ Current TUI gates:
 - `tui_malformed_mouse_ignored`, `tui_malformed_mouse_release_ignored`: malformed SGR mouse reports such as VS Code's `ESC[<32;NaN;NaNM` / `ESC[<35;NaN;NaNm` focus-change noise are ignored instead of leaking characters into the prompt.
 - `tui_shift_backspace_left`: prompt editing treats `Shift+Backspace` like Backspace, matching upstream ChatTextArea keybinding coverage.
 - `tui_shift_delete_right`: prompt editing deletes the character to the right of the cursor.
+- `tui_ctrl_w_delete_word_left`: `Ctrl+W` deletes the word left of the cursor and submits the same edited prompt as Vibe.
 - `tui_initial_prompt`: positional `PROMPT` starts the interactive TUI, submits that prompt after startup, and renders the same user/assistant transcript instead of using programmatic mode.
 - `tui_prompt_bash_allow_expand_tool`, `tui_prompt_bash_allow_expand_collapse_tool`: global `Ctrl+O` expands and re-collapses Vibe-style bash tool output sections (`▶ N lines` / `▼ show less`).
 - `tui_approval_grace_enter`: approval panels ignore an immediate accidental Enter during Vibe's initial input grace period.

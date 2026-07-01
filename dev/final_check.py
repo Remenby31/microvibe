@@ -32,6 +32,7 @@ def main() -> int:
     run(["dev/parity.py", "--all", "--jobs", str(args.jobs)], env=env)
     run(["dev/check_parity_artifacts.py", "--tier", "all"], env=env)
     run(["dev/check_tui_visual_contract.py"], env=env)
+    run(["dev/check_tui_input_contract.py"], env=env)
     run(["git", "diff", "--check"], env=env)
     return 0
 

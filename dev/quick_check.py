@@ -53,6 +53,7 @@ def main() -> int:
             "dev/sitecustomize.py",
             "dev/check_parity_inventory.py",
             "dev/check_parity_artifacts.py",
+            "dev/check_tui_input_contract.py",
             "dev/check_tui_visual_contract.py",
             "dev/extract_mistral_inventory.py",
             "dev/final_check.py",
@@ -78,6 +79,7 @@ def main() -> int:
         run(["dev/parity.py", "--tier", args.smoke_tier, "--jobs", str(args.jobs)], env=env)
         run(["dev/check_parity_artifacts.py", "--tier", args.smoke_tier], env=env)
         run(["dev/check_tui_visual_contract.py"], env=env)
+        run(["dev/check_tui_input_contract.py"], env=env)
     return 0
 
 
