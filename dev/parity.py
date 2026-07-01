@@ -8518,6 +8518,20 @@ def run_all_case_with_retry(
     return last_name, last_returncode, "".join(outputs)
 
 
+def remove_diff_artifacts(names: typing.Iterable[str] | None = None) -> None:
+    if not OUT_DIR.exists():
+        return
+    if names is None:
+        paths = OUT_DIR.glob("*.diff")
+    else:
+        paths = (OUT_DIR / f"{name}.diff" for name in names)
+    for path in paths:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def run_case_collection(
     names: list[str],
     *,
@@ -8527,6 +8541,8 @@ def run_case_collection(
 ) -> int:
     if jobs < 1:
         raise ValueError("jobs must be at least 1")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    remove_diff_artifacts()
     subprocess.run(["cargo", "build"], cwd=ROOT, check=True)
     timeout_scale = min(2.0, max(1.0, jobs / 16))
     failed: list[str] = []
@@ -8628,6 +8644,7 @@ def main() -> int:
     microvibe_acp = resolve_command(microvibe_acp)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    remove_diff_artifacts([case.name])
     vibe_config_text = ""
     micro_config_text = ""
     vibe_history_text = ""
@@ -11024,11 +11041,12 @@ def main() -> int:
             + diff
         )
     diff_path = OUT_DIR / f"{case.name}.diff"
-    diff_path.write_text(diff)
     if diff:
+        diff_path.write_text(diff)
         print(diff)
         print(f"wrote {diff_path}", file=sys.stderr)
         return 1
+    remove_diff_artifacts([case.name])
     print(f"{case.name}: parity OK")
     return 0
 
