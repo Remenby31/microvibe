@@ -48,6 +48,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "target" / "parity"
 ANSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
 CSI_RE = re.compile(r"\x1b\[([0-?]*)([ -/]*)([@-~])")
+CASE_ARTIFACT_SUFFIXES = (
+    ".vibe.raw",
+    ".microvibe.raw",
+    ".vibe.txt",
+    ".microvibe.txt",
+    ".diff",
+)
 
 
 @dataclass(frozen=True)
@@ -8532,6 +8539,28 @@ def remove_diff_artifacts(names: typing.Iterable[str] | None = None) -> None:
             pass
 
 
+def artifact_case_name(path: pathlib.Path) -> str | None:
+    name = path.name
+    for suffix in CASE_ARTIFACT_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return None
+
+
+def remove_stale_case_artifacts(valid_names: typing.Iterable[str]) -> None:
+    if not OUT_DIR.exists():
+        return
+    valid = set(valid_names)
+    for path in OUT_DIR.iterdir():
+        case_name = artifact_case_name(path)
+        if case_name is None or case_name in valid:
+            continue
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def run_case_collection(
     names: list[str],
     *,
@@ -8542,6 +8571,7 @@ def run_case_collection(
     if jobs < 1:
         raise ValueError("jobs must be at least 1")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    remove_stale_case_artifacts(CASES)
     remove_diff_artifacts()
     subprocess.run(["cargo", "build"], cwd=ROOT, check=True)
     timeout_scale = min(2.0, max(1.0, jobs / 16))
@@ -8644,6 +8674,7 @@ def main() -> int:
     microvibe_acp = resolve_command(microvibe_acp)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    remove_stale_case_artifacts(CASES)
     remove_diff_artifacts([case.name])
     vibe_config_text = ""
     micro_config_text = ""

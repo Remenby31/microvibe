@@ -22,6 +22,15 @@ Run the full terminal/programmatic parity matrix:
 dev/parity.py --all
 ```
 
+Audit the transcript artifacts from a completed full run:
+
+```bash
+dev/check_parity_artifacts.py --tier all
+```
+
+This fails if any parity diff remains, if artifacts exist for removed cases, or
+if a declared case is missing one side of its raw/rendered transcript evidence.
+
 Run the fast pre-flight gate while iterating:
 
 ```bash
@@ -31,7 +40,8 @@ dev/quick_check.py --jobs 32
 That command runs Rust formatting, Python syntax checks, the Rust workspace
 tests, inventory parity, and the short parity fast tier. The fast tier samples
 CLI, setup, TUI rendering, ACP, tool approval, file/terminal tools, and
-programmatic text/JSON/streaming paths. To run the broader pre-final smoke tier:
+programmatic text/JSON/streaming paths. It also audits the generated transcript
+artifacts for the selected tier. To run the broader pre-final smoke tier:
 
 ```bash
 dev/parity.py --tier smoke --jobs 32
