@@ -265,6 +265,11 @@ fn is_copy_selection_shortcut(key: &event::KeyEvent) -> bool {
             || key.code == KeyCode::Char('C'))
 }
 
+fn is_tui_exit_command(command: &str) -> bool {
+    let lower = command.trim().to_ascii_lowercase();
+    lower == "/exit" || lower.starts_with("/exit ")
+}
+
 async fn run_inner(
     mut config: Config,
     initial_prompt: Option<String>,
@@ -327,6 +332,7 @@ async fn run_inner(
     let mut queued_inputs: VecDeque<String> = VecDeque::new();
     let mut queued_inputs_paused = false;
     let mut running_bash: Option<RunningManualBash> = None;
+    let mut exit_after_render = false;
 
     if let Some(submitted) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
         add_input_history(&mut input_history, &submitted);
@@ -599,6 +605,7 @@ async fn run_inner(
                     gap,
                     agent_mode_accent(&current_agent_name),
                     palette,
+                    !exit_after_render,
                 ),
             };
             let prompt = Paragraph::new(prompt_lines);
@@ -635,6 +642,10 @@ async fn run_inner(
             }
         })?;
         frame_tick = frame_tick.wrapping_add(1);
+
+        if exit_after_render {
+            break;
+        }
 
         if event::poll(Duration::from_millis(50))? {
             let mut event = event::read()?;
@@ -1393,11 +1404,11 @@ async fn run_inner(
                         &mut input_history_index,
                         &mut input_history_draft,
                     );
-                    if matches!(
-                        command,
-                        "/quit" | "/exit" | "quit" | "exit" | ":q" | ":quit"
-                    ) {
-                        break;
+                    if is_tui_exit_command(command) {
+                        exit_after_render = true;
+                        completion = None;
+                        quit_confirmation = None;
+                        continue;
                     }
                     if command == "/help" {
                         bottom_panel = None;
@@ -2130,6 +2141,7 @@ fn input_panel_lines<'a>(
     gap: usize,
     mode_accent: Color,
     palette: ThemePalette,
+    show_prompt_marker: bool,
 ) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
     let width = separator.chars().count();
@@ -2185,15 +2197,19 @@ fn input_panel_lines<'a>(
     let single_visual_input_line = wrapped_input.len() == 1;
     for (idx, line) in wrapped_input.into_iter().enumerate() {
         if idx == 0 {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "> ",
-                    Style::default()
-                        .fg(VIBE_ORANGE)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(line, Style::default().fg(palette.foreground)),
-            ]));
+            if show_prompt_marker {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "> ",
+                        Style::default()
+                            .fg(VIBE_ORANGE)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(line, Style::default().fg(palette.foreground)),
+                ]));
+            } else {
+                lines.push(Line::from(""));
+            }
         } else {
             lines.push(Line::styled(
                 format!("  {line}"),
@@ -6670,6 +6686,17 @@ fn question_is_multi_select_at(call: &ToolCall, index: usize) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn tui_exit_command_matches_observed_vibe_runtime() {
+        assert!(is_tui_exit_command("/exit"));
+        assert!(is_tui_exit_command("  /EXIT now  "));
+        assert!(!is_tui_exit_command("exit"));
+        assert!(!is_tui_exit_command("quit"));
+        assert!(!is_tui_exit_command(":q"));
+        assert!(!is_tui_exit_command(":quit"));
+        assert!(!is_tui_exit_command("/quit"));
+    }
 
     #[test]
     fn keyboard_enhancement_flags_request_event_types() {

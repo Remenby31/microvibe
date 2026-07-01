@@ -171,6 +171,8 @@ Current TUI gates:
 - `tui_ctrl_c_confirm`, `tui_ctrl_d_confirm`: empty-input quit confirmation prompts appear in the raw terminal stream and expire back to the normal footer.
 - `tui_ctrl_c_clear_input`: `Ctrl+C` with draft input clears the prompt instead of quitting.
 - `tui_ctrl_d_nonempty_no_quit`: `Ctrl+D` with draft input matches Vibe's PTY behavior: it does not trigger quit.
+- `tui_exit_slash`: `/exit` closes the TUI after the same final cleared-prompt frame as Vibe.
+- `tui_exit_plain`, `tui_exit_quit`, `tui_exit_colon_q`, `tui_exit_colon_quit`: `exit`, `quit`, `:q`, and `:quit` follow the currently observable Vibe Textual PTY runtime and are sent as ordinary user prompts, despite being listed as registry aliases upstream.
 - `tui_ctrl_r_no_insert`, `tui_ctrl_r_voice_enabled_no_insert`: `Ctrl+R` is consumed as Vibe's voice-recording shortcut and never inserts a literal `r`, both with voice mode disabled and enabled.
 - `tui_ctrl_y_no_insert`, `tui_ctrl_y_draft_no_insert`: `Ctrl+Y` is consumed as Vibe's copy-selection shortcut and never inserts a literal `y`.
 - `tui_ctrl_shift_c_draft_no_clear`: `Ctrl+Shift+C` is consumed as Vibe's copy-selection shortcut and does not clear draft input like `Ctrl+C`.
