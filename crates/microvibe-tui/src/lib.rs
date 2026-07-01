@@ -352,6 +352,7 @@ async fn run_inner(
     let mut queued_inputs_paused = false;
     let mut running_bash: Option<RunningManualBash> = None;
     let mut exit_after_render = false;
+    let mut exit_prompt_marker = false;
 
     if let Some(submitted) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) {
         add_input_history(&mut input_history, &submitted);
@@ -624,7 +625,7 @@ async fn run_inner(
                     gap,
                     agent_mode_accent(&current_agent_name),
                     palette,
-                    !exit_after_render,
+                    !exit_after_render || exit_prompt_marker,
                 ),
             };
             let prompt = Paragraph::new(prompt_lines);
@@ -1370,6 +1371,13 @@ async fn run_inner(
                     if queued_inputs_paused && bottom_panel.is_none() {
                         if !command.is_empty() {
                             if command.starts_with('/') || command.starts_with('&') {
+                                completion = refresh_completion(
+                                    bottom_panel.is_none(),
+                                    &input,
+                                    input_cursor,
+                                    &completion_entries,
+                                    &mut completion_file_indexer,
+                                );
                                 continue;
                             }
                             let submitted = std::mem::take(&mut input);
@@ -1397,6 +1405,13 @@ async fn run_inner(
                             continue;
                         }
                         if command.starts_with('/') || command.starts_with('&') {
+                            completion = refresh_completion(
+                                bottom_panel.is_none(),
+                                &input,
+                                input_cursor,
+                                &completion_entries,
+                                &mut completion_file_indexer,
+                            );
                             continue;
                         }
                         let submitted = std::mem::take(&mut input);
@@ -1430,6 +1445,7 @@ async fn run_inner(
                     );
                     if is_tui_exit_command(command) {
                         exit_after_render = true;
+                        exit_prompt_marker = command.split_whitespace().count() > 1;
                         completion = None;
                         quit_confirmation = None;
                         continue;
@@ -2500,17 +2516,33 @@ fn completion_command_entries() -> Vec<CommandEntry> {
 
 fn builtin_tui_command_specs() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("/compact", "Compact conversation history by summarizing"),
-        ("/config", "Open configuration"),
-        ("/connectors", "Show MCP connectors"),
-        ("/copy", "Copy the last assistant response"),
+        ("/clear", "Clear conversation history"),
+        (
+            "/compact",
+            "Compact conversation history by summarizing. Optionally pass instructions to guide the summary",
+        ),
+        ("/config", "Edit config settings"),
+        (
+            "/connectors",
+            "Display available MCP servers and connectors. Pass a name to list tools; subcommands: status, login <alias>, logout <alias>",
+        ),
+        ("/continue", "Browse, resume, or delete saved sessions"),
+        ("/copy", "Copy the last agent message to the clipboard"),
         ("/data-retention", "Show data retention information"),
         ("/debug", "Toggle debug console"),
-        ("/help", "Show available commands and keyboard shortcuts"),
+        ("/exit", "Exit the application"),
+        ("/help", "Show help message"),
+        ("/leanstall", "Install the Lean 4 agent (leanstral)"),
         ("/log", "Show path to current interaction log file"),
-        ("/loop", "Schedule repeated prompts"),
-        ("/mcp", "Show MCP servers"),
-        ("/model", "Switch model"),
+        (
+            "/loop",
+            "Schedule a recurring prompt. Use `/loop <interval> <prompt>`, `/loop list`, or `/loop cancel <id|all>`",
+        ),
+        (
+            "/mcp",
+            "Display available MCP servers and connectors. Pass a name to list tools; subcommands: status, login <alias>, logout <alias>",
+        ),
+        ("/model", "Select active model"),
         (
             "/proxy-setup",
             "Configure proxy and SSL certificate settings",
@@ -2520,12 +2552,13 @@ fn builtin_tui_command_specs() -> Vec<(&'static str, &'static str)> {
             "Reload configuration, agent instructions, and skills",
         ),
         ("/rename", "Rename the current session"),
-        ("/resume", "Resume a saved session"),
+        ("/resume", "Browse, resume, or delete saved sessions"),
         ("/rewind", "Rewind the conversation"),
-        ("/teleport", "Teleport session to Vibe Code Web"),
-        ("/theme", "Switch theme"),
-        ("/thinking", "Switch thinking mode"),
-        ("/voice", "Configure voice mode"),
+        ("/status", "Display agent statistics"),
+        ("/theme", "Select theme"),
+        ("/thinking", "Select thinking level"),
+        ("/unleanstall", "Uninstall the Lean 4 agent"),
+        ("/voice", "Configure voice settings"),
     ]
 }
 
@@ -5943,10 +5976,14 @@ fn input_history_next(
 }
 
 fn slash_command_line(command: &str) -> String {
-    command
-        .strip_prefix('/')
-        .map(|rest| format!("/ {rest}"))
-        .unwrap_or_else(|| command.to_string())
+    if let Some(parsed) = parse_tui_slash_command(command) {
+        let word = parsed.word.trim_start_matches('/');
+        if parsed.args.is_empty() {
+            return format!("/ {word}");
+        }
+        return format!("/ {word} {}", parsed.args);
+    }
+    command.to_string()
 }
 
 fn startup_lines(
@@ -6743,6 +6780,16 @@ mod tests {
         assert_eq!(parsed.args, "");
 
         assert!(parse_tui_slash_command("exit").is_none());
+    }
+
+    #[test]
+    fn slash_command_line_normalizes_command_word_case() {
+        assert_eq!(
+            slash_command_line("/STATUS extra Words"),
+            "/ status extra Words"
+        );
+        assert_eq!(slash_command_line("/model"), "/ model");
+        assert_eq!(slash_command_line("exit"), "exit");
     }
 
     #[test]

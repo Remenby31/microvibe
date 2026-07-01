@@ -229,8 +229,10 @@ CASES: dict[str, Case] = {
     "tui_startup_auto_approve": Case("tui_startup_auto_approve", "tui_auto_approve", b"", settle=3.0, timeout=10.0),
     "tui_help": Case("tui_help", "tui", b"/help\x1b\r", settle=1.0, timeout=5.0),
     "tui_help_args": Case("tui_help_args", "tui", b"/help now\x1b\r", settle=1.0, timeout=5.0),
+    "tui_help_upper": Case("tui_help_upper", "tui", b"/HELP\x1b\r", settle=1.0, timeout=5.0),
     "tui_status": Case("tui_status", "tui", b"/status\x1b\r", settle=1.0, timeout=5.0),
     "tui_status_args": Case("tui_status_args", "tui", b"/status now\x1b\r", settle=1.0, timeout=5.0),
+    "tui_status_upper_args": Case("tui_status_upper_args", "tui", b"/STATUS now\x1b\r", settle=1.0, timeout=5.0),
     "tui_data_retention": Case("tui_data_retention", "tui", b"/data-retention\x1b\r", settle=1.0, timeout=5.0),
     "tui_data_retention_args": Case("tui_data_retention_args", "tui", b"/data-retention now\x1b\r", settle=1.0, timeout=5.0),
     "tui_debug_command": Case("tui_debug_command", "tui", b"/debug\x1b\r", settle=1.0, timeout=5.0),
@@ -329,6 +331,7 @@ CASES: dict[str, Case] = {
     "tui_ctrl_d_confirm": Case("tui_ctrl_d_confirm", "tui", b"\x04", settle=0.4, timeout=5.0),
     "tui_ctrl_d_nonempty_no_quit": Case("tui_ctrl_d_nonempty_no_quit", "tui", b"abc\x1b[D\x04", settle=1.0, timeout=5.0),
     "tui_exit_slash": Case("tui_exit_slash", "tui", b"/exit\x1b\r", settle=0.6, timeout=5.0),
+    "tui_exit_slash_args": Case("tui_exit_slash_args", "tui", b"/exit now\x1b\r", settle=0.6, timeout=5.0),
     "tui_exit_plain": Case("tui_exit_plain", "tui", b"exit\x1b\r", settle=0.6, timeout=5.0),
     "tui_exit_quit": Case("tui_exit_quit", "tui", b"quit\x1b\r", settle=0.6, timeout=5.0),
     "tui_exit_colon_q": Case("tui_exit_colon_q", "tui", b":q\x1b\r", settle=0.6, timeout=5.0),
@@ -346,6 +349,8 @@ CASES: dict[str, Case] = {
     "tui_ctrl_w_delete_word_left": Case("tui_ctrl_w_delete_word_left", "tui", b"alpha beta gamma\x17\x1b\r", settle=1.0, timeout=8.0),
     "tui_initial_prompt": Case("tui_initial_prompt", "tui_initial_prompt", b"", settle=1.0, timeout=8.0),
     "tui_prompt_simple": Case("tui_prompt_simple", "tui", b"hello tui\x1b\r", settle=1.0, timeout=8.0),
+    "tui_prompt_unknown_slash": Case("tui_prompt_unknown_slash", "tui", b"/nonexistent-skill\x1b\r", settle=1.0, timeout=8.0),
+    "tui_bare_slash_completion_help": Case("tui_bare_slash_completion_help", "tui", b"", settle=1.0, timeout=8.0),
     "tui_prompt_queue_during_turn": Case("tui_prompt_queue_during_turn", "tui", b"", settle=1.0, timeout=10.0),
     "tui_prompt_queue_ctrl_c_pop": Case("tui_prompt_queue_ctrl_c_pop", "tui", b"", settle=1.0, timeout=10.0),
     "tui_prompt_history_up": Case("tui_prompt_history_up", "tui", b"", settle=1.0, timeout=8.0),
@@ -374,8 +379,10 @@ CASES: dict[str, Case] = {
     "tui_bang_empty": Case("tui_bang_empty", "tui", b"!\x1b\r", settle=1.0, timeout=5.0),
     "tui_bang_bash": Case("tui_bang_bash", "tui", b"!printf manual-bash\x1b\r", settle=1.0, timeout=8.0),
     "tui_bang_queue_bash": Case("tui_bang_queue_bash", "tui", b"", settle=1.0, timeout=8.0),
+    "tui_bang_queue_ctrl_c_lifo": Case("tui_bang_queue_ctrl_c_lifo", "tui", b"", settle=1.0, timeout=8.0),
     "tui_bang_queue_pause_escape": Case("tui_bang_queue_pause_escape", "tui", b"", settle=1.0, timeout=8.0),
     "tui_bang_queue_pause_enter_flush": Case("tui_bang_queue_pause_enter_flush", "tui", b"", settle=1.0, timeout=8.0),
+    "tui_bang_busy_slash_rejected": Case("tui_bang_busy_slash_rejected", "tui", b"", settle=1.0, timeout=8.0),
     "tui_bang_large_context": Case("tui_bang_large_context", "tui", b"!python3 -c 'import sys; print(\"x\"*80); print(\"e\"*80, file=sys.stderr)'\x1b\r", settle=1.0, timeout=8.0),
     "tui_prompt_bash": Case("tui_prompt_bash", "tui", b"run bash\x1b\r", settle=1.0, timeout=10.0),
     "tui_animation_bash_spinner": Case("tui_animation_bash_spinner", "animation_tui", b"run bash\x1b\r", settle=1.0, timeout=10.0),
@@ -538,8 +545,10 @@ SERIAL_ALL_CASES = {
     "tui_startup_auto_approve",
     "tui_help",
     "tui_help_args",
+    "tui_help_upper",
     "tui_status",
     "tui_status_args",
+    "tui_status_upper_args",
     "tui_data_retention",
     "tui_data_retention_args",
     "tui_debug_command",
@@ -626,6 +635,7 @@ SERIAL_ALL_CASES = {
     "tui_ctrl_d_confirm",
     "tui_ctrl_d_nonempty_no_quit",
     "tui_exit_slash",
+    "tui_exit_slash_args",
     "tui_exit_plain",
     "tui_exit_quit",
     "tui_exit_colon_q",
@@ -687,8 +697,10 @@ SMOKE_CASES = [
     "tui_startup_auto_approve",
     "tui_help",
     "tui_help_args",
+    "tui_help_upper",
     "tui_status",
     "tui_status_args",
+    "tui_status_upper_args",
     "tui_data_retention",
     "tui_data_retention_args",
     "tui_debug_command",
@@ -787,6 +799,7 @@ SMOKE_CASES = [
     "tui_ctrl_d_confirm",
     "tui_ctrl_d_nonempty_no_quit",
     "tui_exit_slash",
+    "tui_exit_slash_args",
     "tui_exit_plain",
     "tui_exit_quit",
     "tui_exit_colon_q",
@@ -826,14 +839,18 @@ SMOKE_CASES = [
     "tui_scroll_shift_up",
     "tui_scroll_shift_up_down",
     "tui_prompt_simple",
+    "tui_prompt_unknown_slash",
+    "tui_bare_slash_completion_help",
     "tui_prompt_read",
     "tui_prompt_read_expand_tool",
     "tui_prompt_read_expand_collapse_tool",
     "tui_bang_empty",
     "tui_bang_bash",
     "tui_bang_queue_bash",
+    "tui_bang_queue_ctrl_c_lifo",
     "tui_bang_queue_pause_escape",
     "tui_bang_queue_pause_enter_flush",
+    "tui_bang_busy_slash_rejected",
     "tui_bang_large_context",
     "tui_prompt_bash",
     "tui_approval_grace_enter",
@@ -1086,14 +1103,18 @@ FAST_CASES = [
     "default_tui_startup",
     "tui_help",
     "tui_help_args",
+    "tui_help_upper",
     "tui_prompt_simple",
+    "tui_prompt_unknown_slash",
     "tui_ctrl_y_no_insert",
     "tui_ctrl_y_draft_no_insert",
     "tui_ctrl_shift_c_draft_no_clear",
     "tui_malformed_mouse_ignored",
     "tui_malformed_mouse_release_ignored",
     "tui_exit_slash",
+    "tui_exit_slash_args",
     "tui_status_args",
+    "tui_status_upper_args",
     "tui_model_picker_args",
     "tui_delete_right",
     "tui_shift_backspace_left",
@@ -3893,6 +3914,26 @@ def run_pty(cmd: list[str], env: dict[str, str], case: Case, cwd: pathlib.Path) 
                     case.settle,
                 )
             )
+        elif case.name == "tui_bang_queue_ctrl_c_lifo":
+            try:
+                os.write(fd, b"!sleep 0.5\r")
+                time.sleep(0.1)
+                os.write(fd, b"!printf first-bash\r")
+                transcript.extend(read_until(fd, [b"Queued"], case.timeout))
+                os.write(fd, b"!printf second-bash\r")
+                transcript.extend(read_until(fd, [b"second-bash"], case.timeout))
+                time.sleep(0.1)
+                os.write(fd, b"\x03")
+                transcript.extend(read_until(fd, [b"first-bash"], case.timeout))
+            except OSError:
+                pass
+            transcript.extend(
+                read_available(
+                    fd,
+                    time.monotonic() + case.timeout,
+                    case.settle,
+                )
+            )
         elif case.name in {"tui_bang_queue_pause_escape", "tui_bang_queue_pause_enter_flush"}:
             try:
                 os.write(fd, b"!sleep 2\r")
@@ -3904,6 +3945,24 @@ def run_pty(cmd: list[str], env: dict[str, str], case: Case, cwd: pathlib.Path) 
                 if case.name == "tui_bang_queue_pause_enter_flush":
                     os.write(fd, b"\r")
                     transcript.extend(read_until(fd, [b"paused-bash"], case.timeout))
+            except OSError:
+                pass
+            transcript.extend(
+                read_available(
+                    fd,
+                    time.monotonic() + case.timeout,
+                    case.settle,
+                )
+            )
+        elif case.name == "tui_bang_busy_slash_rejected":
+            try:
+                os.write(fd, b"!sleep 0.5\r")
+                time.sleep(0.1)
+                os.write(fd, b"/help")
+                transcript.extend(read_until(fd, [b"/help"], case.timeout))
+                time.sleep(0.4)
+                os.write(fd, b"\r")
+                time.sleep(0.7)
             except OSError:
                 pass
             transcript.extend(
@@ -4362,6 +4421,36 @@ def run_pty(cmd: list[str], env: dict[str, str], case: Case, cwd: pathlib.Path) 
                     time.sleep(1.0)
                     os.write(fd, b"\x1b[Z")
                     transcript.extend(read_until(fd, [b"review bot"], case.timeout))
+            except OSError:
+                pass
+            transcript.extend(
+                read_available(
+                    fd,
+                    time.monotonic() + case.timeout,
+                    case.settle,
+                )
+            )
+        elif case.name == "tui_exit_slash_args":
+            try:
+                os.write(fd, b"/exit now")
+                transcript.extend(read_for(fd, 0.4))
+                os.write(fd, b"\x1b")
+                transcript.extend(read_for(fd, 0.2))
+                os.write(fd, b"\r")
+            except OSError:
+                pass
+            transcript.extend(
+                read_available(
+                    fd,
+                    time.monotonic() + case.timeout,
+                    case.settle,
+                )
+            )
+        elif case.name == "tui_bare_slash_completion_help":
+            try:
+                os.write(fd, b"/")
+                transcript.extend(read_for(fd, 0.3))
+                os.write(fd, b"\r")
             except OSError:
                 pass
             transcript.extend(
@@ -8328,7 +8417,7 @@ def request_projection_text(case_name: str, requests: list[dict[str, object]]) -
             "user_messages_by_request": user_messages_by_request,
         }
         return "\n<request_projection>" + json.dumps(projection, sort_keys=True, ensure_ascii=False) + "</request_projection>\n"
-    if case_name not in {"tui_prompt_queue_during_turn", "tui_prompt_queue_ctrl_c_pop", "tui_slash_skill", "tui_prompt_at_file", "tui_completion_path_file", "tui_prompt_at_folder", "tui_prompt_at_image", "tui_paste_image_path"} | TUI_LINE_EDITING_PROMPT_CASES | TUI_EXIT_ALIAS_PROMPT_CASES:
+    if case_name not in {"tui_prompt_queue_during_turn", "tui_prompt_queue_ctrl_c_pop", "tui_prompt_unknown_slash", "tui_slash_skill", "tui_prompt_at_file", "tui_completion_path_file", "tui_prompt_at_folder", "tui_prompt_at_image", "tui_paste_image_path"} | TUI_LINE_EDITING_PROMPT_CASES | TUI_EXIT_ALIAS_PROMPT_CASES:
         return ""
     user_messages: list[str] = []
     multimodal_user_messages: list[dict[str, object]] = []
@@ -10050,7 +10139,7 @@ def main() -> int:
                         case,
                         ROOT,
                     )
-            elif case.name in {"tui_initial_prompt", "tui_prompt_simple", "tui_prompt_queue_during_turn", "tui_prompt_queue_ctrl_c_pop", "tui_copy_last_agent", "tui_copy_last_agent_xclip", "tui_prompt_history_up", "tui_prompt_history_up_down", "tui_prompt_history_persisted", "tui_prompt_multiline_ctrl_j", "tui_bang_large_context", "tui_prompt_at_file", "tui_completion_slash", "tui_completion_slash_nav_enter", "tui_completion_path_popup_list", "tui_completion_path_popup_ten", "tui_completion_path_dir_tab", "tui_completion_path_file", "tui_prompt_at_folder", "tui_prompt_at_image", "tui_paste_image_path", "tui_prompt_at_image_no_vision", "tui_prompt_too_many_images", "tui_external_editor_input", "tui_external_editor_empty", "tui_scroll_shift_up", "tui_scroll_shift_up_down", "tui_prompt_read", "tui_prompt_read_expand_tool", "tui_prompt_read_expand_collapse_tool", "tui_prompt_bash", "tui_animation_bash_spinner", "tui_approval_grace_enter", "tui_prompt_bash_allow", "tui_prompt_bash_allow_y", "tui_prompt_bash_allow_expand_tool", "tui_prompt_bash_allow_expand_collapse_tool", "tui_prompt_bash_allow_session", "tui_prompt_bash_always", "tui_prompt_bash_persisted_allow", "tui_prompt_bash_deny", "tui_prompt_bash_deny_n", "tui_prompt_file_tools", "tui_animation_write_file_spinner", "tui_animation_edit_spinner", "tui_prompt_file_tools_allow_write", "tui_prompt_file_tools_allow_edit", "tui_prompt_file_tools_expand_tool", "tui_prompt_todo", "tui_prompt_todo_empty", "tui_slash_skill", "tui_prompt_skill", "tui_prompt_skill_expand_tool", "tui_prompt_task", "tui_animation_task_spinner", "tui_prompt_task_allow_explore", "tui_prompt_task_allow_unknown", "tui_prompt_task_deny", "tui_prompt_web_fetch", "tui_prompt_web_fetch_expand_tool", "tui_animation_web_fetch_spinner", "tui_prompt_web_search", "tui_animation_web_search_spinner", "tui_prompt_web_search_expand_tool", "tui_prompt_question", "tui_animation_question_spinner", "tui_question_grace_enter", "tui_prompt_question_expand_tool", "tui_prompt_question_other", "tui_prompt_question_multi", "tui_prompt_question_multiselect", "tui_prompt_question_multiselect_other", "tui_prompt_exit_plan_auto", "tui_animation_exit_plan_spinner", "tui_prompt_exit_plan_default", "tui_prompt_exit_plan_no", "tui_prompt_exit_plan_editor"} or case.name in TUI_LINE_EDITING_PROMPT_CASES or case.name in TUI_EXIT_ALIAS_PROMPT_CASES:
+            elif case.name in {"tui_initial_prompt", "tui_prompt_simple", "tui_prompt_unknown_slash", "tui_prompt_queue_during_turn", "tui_prompt_queue_ctrl_c_pop", "tui_copy_last_agent", "tui_copy_last_agent_xclip", "tui_prompt_history_up", "tui_prompt_history_up_down", "tui_prompt_history_persisted", "tui_prompt_multiline_ctrl_j", "tui_bang_large_context", "tui_prompt_at_file", "tui_completion_slash", "tui_completion_slash_nav_enter", "tui_completion_path_popup_list", "tui_completion_path_popup_ten", "tui_completion_path_dir_tab", "tui_completion_path_file", "tui_prompt_at_folder", "tui_prompt_at_image", "tui_paste_image_path", "tui_prompt_at_image_no_vision", "tui_prompt_too_many_images", "tui_external_editor_input", "tui_external_editor_empty", "tui_scroll_shift_up", "tui_scroll_shift_up_down", "tui_prompt_read", "tui_prompt_read_expand_tool", "tui_prompt_read_expand_collapse_tool", "tui_prompt_bash", "tui_animation_bash_spinner", "tui_approval_grace_enter", "tui_prompt_bash_allow", "tui_prompt_bash_allow_y", "tui_prompt_bash_allow_expand_tool", "tui_prompt_bash_allow_expand_collapse_tool", "tui_prompt_bash_allow_session", "tui_prompt_bash_always", "tui_prompt_bash_persisted_allow", "tui_prompt_bash_deny", "tui_prompt_bash_deny_n", "tui_prompt_file_tools", "tui_animation_write_file_spinner", "tui_animation_edit_spinner", "tui_prompt_file_tools_allow_write", "tui_prompt_file_tools_allow_edit", "tui_prompt_file_tools_expand_tool", "tui_prompt_todo", "tui_prompt_todo_empty", "tui_slash_skill", "tui_prompt_skill", "tui_prompt_skill_expand_tool", "tui_prompt_task", "tui_animation_task_spinner", "tui_prompt_task_allow_explore", "tui_prompt_task_allow_unknown", "tui_prompt_task_deny", "tui_prompt_web_fetch", "tui_prompt_web_fetch_expand_tool", "tui_animation_web_fetch_spinner", "tui_prompt_web_search", "tui_animation_web_search_spinner", "tui_prompt_web_search_expand_tool", "tui_prompt_question", "tui_animation_question_spinner", "tui_question_grace_enter", "tui_prompt_question_expand_tool", "tui_prompt_question_other", "tui_prompt_question_multi", "tui_prompt_question_multiselect", "tui_prompt_question_multiselect_other", "tui_prompt_exit_plan_auto", "tui_animation_exit_plan_spinner", "tui_prompt_exit_plan_default", "tui_prompt_exit_plan_no", "tui_prompt_exit_plan_editor"} or case.name in TUI_LINE_EDITING_PROMPT_CASES or case.name in TUI_EXIT_ALIAS_PROMPT_CASES:
                 with ThreadingTCPServer(("127.0.0.1", 0), FakeChatHandler) as server:
                     port = int(server.server_address[1])
                     workspace = tmp_path / "workspace"
@@ -10723,7 +10812,7 @@ def main() -> int:
                         case,
                         workspace,
                     )
-                    if case.name in {"tui_prompt_queue_during_turn", "tui_prompt_queue_ctrl_c_pop", "tui_slash_skill", "tui_prompt_at_file", "tui_completion_path_file", "tui_prompt_at_folder", "tui_prompt_at_image", "tui_paste_image_path", "tui_prompt_at_image_no_vision", "tui_prompt_too_many_images"} or case.name in TUI_LINE_EDITING_PROMPT_CASES or case.name in TUI_EXIT_ALIAS_PROMPT_CASES:
+                    if case.name in {"tui_prompt_queue_during_turn", "tui_prompt_queue_ctrl_c_pop", "tui_prompt_unknown_slash", "tui_slash_skill", "tui_prompt_at_file", "tui_completion_path_file", "tui_prompt_at_folder", "tui_prompt_at_image", "tui_paste_image_path", "tui_prompt_at_image_no_vision", "tui_prompt_too_many_images"} or case.name in TUI_LINE_EDITING_PROMPT_CASES or case.name in TUI_EXIT_ALIAS_PROMPT_CASES:
                         vibe_side_effect_text = request_projection_text(case.name, FakeChatHandler.requests)
                     if case.name in {"tui_prompt_bash_deny", "tui_prompt_bash_deny_n"}:
                         denied_marker = workspace / "denied-side-effect.txt"
@@ -10764,7 +10853,7 @@ def main() -> int:
                         case,
                         workspace,
                     )
-                    if case.name in {"tui_prompt_queue_during_turn", "tui_prompt_queue_ctrl_c_pop", "tui_slash_skill", "tui_prompt_at_file", "tui_completion_path_file", "tui_prompt_at_folder", "tui_prompt_at_image", "tui_paste_image_path", "tui_prompt_at_image_no_vision", "tui_prompt_too_many_images"} or case.name in TUI_LINE_EDITING_PROMPT_CASES or case.name in TUI_EXIT_ALIAS_PROMPT_CASES:
+                    if case.name in {"tui_prompt_queue_during_turn", "tui_prompt_queue_ctrl_c_pop", "tui_prompt_unknown_slash", "tui_slash_skill", "tui_prompt_at_file", "tui_completion_path_file", "tui_prompt_at_folder", "tui_prompt_at_image", "tui_paste_image_path", "tui_prompt_at_image_no_vision", "tui_prompt_too_many_images"} or case.name in TUI_LINE_EDITING_PROMPT_CASES or case.name in TUI_EXIT_ALIAS_PROMPT_CASES:
                         micro_side_effect_text = request_projection_text(case.name, FakeChatHandler.requests)
                     if case.name in {"tui_prompt_bash_deny", "tui_prompt_bash_deny_n"}:
                         denied_marker = workspace / "denied-side-effect.txt"
@@ -10910,7 +10999,7 @@ def main() -> int:
                 micro_side_effect_text = trust_file_projection(case.name, tmp_path, "microvibe")
                 # Skip the generic TUI runner below; this branch already produced raw output.
                 pass
-            elif case.name not in {"tui_initial_prompt", "tui_prompt_simple", "tui_prompt_queue_during_turn", "tui_prompt_queue_ctrl_c_pop", "tui_copy_last_agent", "tui_copy_last_agent_xclip", "tui_prompt_history_up", "tui_prompt_history_up_down", "tui_prompt_history_persisted", "tui_prompt_multiline_ctrl_j", "tui_bang_large_context", "tui_prompt_at_file", "tui_completion_slash", "tui_completion_slash_nav_enter", "tui_completion_path_popup_list", "tui_completion_path_popup_ten", "tui_completion_path_dir_tab", "tui_completion_path_file", "tui_prompt_at_folder", "tui_prompt_at_image", "tui_paste_image_path", "tui_prompt_at_image_no_vision", "tui_prompt_too_many_images", "tui_external_editor_input", "tui_external_editor_empty", "tui_scroll_shift_up", "tui_scroll_shift_up_down", "tui_prompt_read", "tui_prompt_read_expand_tool", "tui_prompt_read_expand_collapse_tool", "tui_prompt_bash", "tui_animation_bash_spinner", "tui_approval_grace_enter", "tui_prompt_bash_allow", "tui_prompt_bash_allow_y", "tui_prompt_bash_allow_expand_tool", "tui_prompt_bash_allow_expand_collapse_tool", "tui_prompt_bash_allow_session", "tui_prompt_bash_always", "tui_prompt_bash_persisted_allow", "tui_prompt_bash_deny", "tui_prompt_bash_deny_n", "tui_prompt_file_tools", "tui_animation_write_file_spinner", "tui_animation_edit_spinner", "tui_prompt_file_tools_allow_write", "tui_prompt_file_tools_allow_edit", "tui_prompt_file_tools_expand_tool", "tui_prompt_todo", "tui_prompt_todo_empty", "tui_slash_skill", "tui_prompt_skill", "tui_prompt_skill_expand_tool", "tui_prompt_task", "tui_animation_task_spinner", "tui_prompt_task_allow_explore", "tui_prompt_task_allow_unknown", "tui_prompt_task_deny", "tui_prompt_web_fetch", "tui_prompt_web_fetch_expand_tool", "tui_animation_web_fetch_spinner", "tui_prompt_web_search", "tui_animation_web_search_spinner", "tui_prompt_web_search_expand_tool", "tui_prompt_question", "tui_animation_question_spinner", "tui_question_grace_enter", "tui_prompt_question_expand_tool", "tui_prompt_question_other", "tui_prompt_question_multi", "tui_prompt_question_multiselect", "tui_prompt_question_multiselect_other", "tui_prompt_exit_plan_auto", "tui_animation_exit_plan_spinner", "tui_prompt_exit_plan_default", "tui_prompt_exit_plan_no", "tui_prompt_exit_plan_editor"} and case.name not in TUI_LINE_EDITING_PROMPT_CASES and case.name not in TUI_EXIT_ALIAS_PROMPT_CASES:
+            elif case.name not in {"tui_initial_prompt", "tui_prompt_simple", "tui_prompt_unknown_slash", "tui_prompt_queue_during_turn", "tui_prompt_queue_ctrl_c_pop", "tui_copy_last_agent", "tui_copy_last_agent_xclip", "tui_prompt_history_up", "tui_prompt_history_up_down", "tui_prompt_history_persisted", "tui_prompt_multiline_ctrl_j", "tui_bang_large_context", "tui_prompt_at_file", "tui_completion_slash", "tui_completion_slash_nav_enter", "tui_completion_path_popup_list", "tui_completion_path_popup_ten", "tui_completion_path_dir_tab", "tui_completion_path_file", "tui_prompt_at_folder", "tui_prompt_at_image", "tui_paste_image_path", "tui_prompt_at_image_no_vision", "tui_prompt_too_many_images", "tui_external_editor_input", "tui_external_editor_empty", "tui_scroll_shift_up", "tui_scroll_shift_up_down", "tui_prompt_read", "tui_prompt_read_expand_tool", "tui_prompt_read_expand_collapse_tool", "tui_prompt_bash", "tui_animation_bash_spinner", "tui_approval_grace_enter", "tui_prompt_bash_allow", "tui_prompt_bash_allow_y", "tui_prompt_bash_allow_expand_tool", "tui_prompt_bash_allow_expand_collapse_tool", "tui_prompt_bash_allow_session", "tui_prompt_bash_always", "tui_prompt_bash_persisted_allow", "tui_prompt_bash_deny", "tui_prompt_bash_deny_n", "tui_prompt_file_tools", "tui_animation_write_file_spinner", "tui_animation_edit_spinner", "tui_prompt_file_tools_allow_write", "tui_prompt_file_tools_allow_edit", "tui_prompt_file_tools_expand_tool", "tui_prompt_todo", "tui_prompt_todo_empty", "tui_slash_skill", "tui_prompt_skill", "tui_prompt_skill_expand_tool", "tui_prompt_task", "tui_animation_task_spinner", "tui_prompt_task_allow_explore", "tui_prompt_task_allow_unknown", "tui_prompt_task_deny", "tui_prompt_web_fetch", "tui_prompt_web_fetch_expand_tool", "tui_animation_web_fetch_spinner", "tui_prompt_web_search", "tui_animation_web_search_spinner", "tui_prompt_web_search_expand_tool", "tui_prompt_question", "tui_animation_question_spinner", "tui_question_grace_enter", "tui_prompt_question_expand_tool", "tui_prompt_question_other", "tui_prompt_question_multi", "tui_prompt_question_multiselect", "tui_prompt_question_multiselect_other", "tui_prompt_exit_plan_auto", "tui_animation_exit_plan_spinner", "tui_prompt_exit_plan_default", "tui_prompt_exit_plan_no", "tui_prompt_exit_plan_editor"} and case.name not in TUI_LINE_EDITING_PROMPT_CASES and case.name not in TUI_EXIT_ALIAS_PROMPT_CASES:
                 vibe_env = isolated_env("vibe", tmp_path)
                 micro_env = isolated_env("microvibe", tmp_path)
                 workspace = ROOT

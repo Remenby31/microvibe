@@ -124,6 +124,7 @@ Current TUI gates:
 - `tui_animation_bash_spinner`, `tui_animation_write_file_spinner`, `tui_animation_edit_spinner`, `tui_animation_web_fetch_spinner`, `tui_animation_web_search_spinner`, `tui_animation_task_spinner`, `tui_animation_question_spinner`, `tui_animation_exit_plan_spinner`: forced pending tool or confirmation states capture the raw terminal stream and verify both Vibe and microvibe animate the matching visible status with a rich two-cell braille snake sequence instead of a static or trivial spinner.
 - `tui_help`: `/help` command screen.
 - `tui_help_args`, `tui_status_args`, `tui_data_retention_args`, `tui_reload_args`, `tui_log_args`, `tui_copy_args`, `tui_model_picker_args`, `tui_theme_picker_args`, `tui_thinking_picker_args`, `tui_config_args`, `tui_voice_args`: slash commands parse on the first command word like Vibe's `CommandRegistry`, preserving the typed arguments in the visible command line where Vibe does and ignoring them for handlers that do not consume arguments.
+- `tui_help_upper`, `tui_status_upper_args`: slash command names are case-insensitive while preserving Vibe's visible typed command text.
 - `tui_status`: `/status` command screen.
 - `tui_data_retention`: `/data-retention` command message.
 - `tui_debug_command`, `tui_debug_ctrl_backslash`: debug console toggle through `/debug` and global `Ctrl+\`; these use a raw stream projection because current upstream Vibe renders the dock and then emits a Textual traceback in the PTY harness.
@@ -172,7 +173,7 @@ Current TUI gates:
 - `tui_ctrl_c_confirm`, `tui_ctrl_d_confirm`: empty-input quit confirmation prompts appear in the raw terminal stream and expire back to the normal footer.
 - `tui_ctrl_c_clear_input`: `Ctrl+C` with draft input clears the prompt instead of quitting.
 - `tui_ctrl_d_nonempty_no_quit`: `Ctrl+D` with draft input matches Vibe's PTY behavior: it does not trigger quit.
-- `tui_exit_slash`: `/exit` closes the TUI after the same final cleared-prompt frame as Vibe.
+- `tui_exit_slash`, `tui_exit_slash_args`: `/exit` closes the TUI after the same final cleared-prompt frame as Vibe, including slash-exit invocations with trailing arguments.
 - `tui_exit_plain`, `tui_exit_quit`, `tui_exit_colon_q`, `tui_exit_colon_quit`: `exit`, `quit`, `:q`, and `:quit` follow the currently observable Vibe Textual PTY runtime and are sent as ordinary user prompts, despite being listed as registry aliases upstream.
 - `tui_ctrl_r_no_insert`, `tui_ctrl_r_voice_enabled_no_insert`: `Ctrl+R` is consumed as Vibe's voice-recording shortcut and never inserts a literal `r`, both with voice mode disabled and enabled.
 - `tui_ctrl_y_no_insert`, `tui_ctrl_y_draft_no_insert`: `Ctrl+Y` is consumed as Vibe's copy-selection shortcut and never inserts a literal `y`.
@@ -182,6 +183,8 @@ Current TUI gates:
 - `tui_shift_delete_right`: prompt editing deletes the character to the right of the cursor.
 - `tui_ctrl_w_delete_word_left`: `Ctrl+W` deletes the word left of the cursor and submits the same edited prompt as Vibe.
 - `tui_initial_prompt`: positional `PROMPT` starts the interactive TUI, submits that prompt after startup, and renders the same user/assistant transcript instead of using programmatic mode.
+- `tui_prompt_unknown_slash`: unknown slash-prefixed input falls through to the agent instead of being treated as a failed slash command.
+- `tui_bare_slash_completion_help`: typing a bare slash and pressing Enter in the real TUI accepts Vibe's first slash completion and opens `/help`.
 - `tui_prompt_bash_allow_expand_tool`, `tui_prompt_bash_allow_expand_collapse_tool`: global `Ctrl+O` expands and re-collapses Vibe-style bash tool output sections (`▶ N lines` / `▼ show less`).
 - `tui_approval_grace_enter`: approval panels ignore an immediate accidental Enter during Vibe's initial input grace period.
 - `tui_prompt_read_expand_tool`, `tui_prompt_read_expand_collapse_tool`: global `Ctrl+O` expands and re-collapses Vibe-style `read` output, including stripped line numbers.
@@ -196,7 +199,7 @@ Current TUI gates:
 - `tui_prompt_at_image`: TUI `@path` mentions for images keep the raw visible user prompt, render Vibe's attached-image footer, snapshot the image, and send native `image_url` multimodal content to the model.
 - `tui_paste_image_path`: bracketed paste of a bare absolute image path rewrites the prompt to Vibe's `@path` image mention before submission.
 - `tui_prompt_at_image_no_vision`: TUI image mentions against a non-vision model render Vibe's clear model-support error and do not send a model request.
-- `tui_bang_empty`, `tui_bang_bash`, `tui_bang_queue_bash`, `tui_bang_queue_pause_escape`, `tui_bang_queue_pause_enter_flush`, `tui_bang_large_context`: manual `!` shell input matches Vibe's empty-command error, command-output rendering, saved session context injection, FIFO queuing while a manual bash command is still running, `Esc` pausing queued work with the paused queue header, empty `Enter` resuming that paused queue, and `bash.max_output_bytes` truncation for large injected stdout/stderr.
+- `tui_bang_empty`, `tui_bang_bash`, `tui_bang_queue_bash`, `tui_bang_queue_ctrl_c_lifo`, `tui_bang_queue_pause_escape`, `tui_bang_queue_pause_enter_flush`, `tui_bang_busy_slash_rejected`, `tui_bang_large_context`: manual `!` shell input matches Vibe's empty-command error, command-output rendering, saved session context injection, FIFO queuing while a manual bash command is still running, `Ctrl+C` popping the newest queued bash item, `Esc` pausing queued work with the paused queue header, empty `Enter` resuming that paused queue, slash-command rejection while busy, and `bash.max_output_bytes` truncation for large injected stdout/stderr.
 - `tui_external_editor_input`, `tui_external_editor_empty`: `Ctrl+G` opens the configured external editor for filled and empty input, passes the current buffer through a `vibe_*.md` temp file, strips trailing whitespace, and replaces the prompt with edited content.
 - `tui_scroll_shift_up`, `tui_scroll_shift_up_down`: global `Shift+Up` and `Shift+Down` scroll the chat viewport by Vibe's five-line step and restore the bottom view.
 - `tui_prompt_todo`, `tui_prompt_todo_empty`: forced `todo.write`/`todo.read` render Vibe's todo result widget, including empty state, status ordering, and icons.
