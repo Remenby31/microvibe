@@ -270,6 +270,25 @@ fn is_tui_exit_command(command: &str) -> bool {
     lower == "/exit" || lower.starts_with("/exit ")
 }
 
+struct SlashCommand<'a> {
+    word: String,
+    args: &'a str,
+}
+
+fn parse_tui_slash_command(command: &str) -> Option<SlashCommand<'_>> {
+    let command = command.trim();
+    let (word, args) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    if !word.starts_with('/') {
+        return None;
+    }
+    Some(SlashCommand {
+        word: word.to_ascii_lowercase(),
+        args: args.trim_start(),
+    })
+}
+
 async fn run_inner(
     mut config: Config,
     initial_prompt: Option<String>,
@@ -1399,6 +1418,11 @@ async fn run_inner(
                     let submitted = std::mem::take(&mut input);
                     input_cursor = 0;
                     let command = submitted.trim();
+                    let slash_command = parse_tui_slash_command(command);
+                    let command_word = slash_command
+                        .as_ref()
+                        .map(|command| command.word.as_str())
+                        .unwrap_or(command);
                     add_input_history(&mut input_history, &submitted);
                     reset_input_history_navigation(
                         &mut input_history_index,
@@ -1410,27 +1434,24 @@ async fn run_inner(
                         quit_confirmation = None;
                         continue;
                     }
-                    if command == "/help" {
+                    if command_word == "/help" {
                         bottom_panel = None;
                         transcript = help_lines();
                         continue;
                     }
-                    if command == "/debug" {
+                    if command_word == "/debug" {
                         clear_initializing(&mut transcript);
                         transcript.push(slash_command_line(command));
                         debug_console = !debug_console;
                         continue;
                     }
-                    if command
-                        .strip_prefix("/loop")
-                        .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
-                    {
+                    if command_word == "/loop" {
                         bottom_panel = None;
                         clear_initializing(&mut transcript);
                         transcript.extend(loop_command_lines(command, &mut scheduled_loops));
                         continue;
                     }
-                    if matches!(command, "/resume" | "/continue") {
+                    if matches!(command_word, "/resume" | "/continue") {
                         let sessions = std::env::current_dir()
                             .ok()
                             .and_then(|cwd| SessionStore::list_for_cwd(&cwd).ok())
@@ -1443,10 +1464,11 @@ async fn run_inner(
                             continue;
                         }
                     }
-                    if let Some(extra) = command
-                        .strip_prefix("/compact")
-                        .filter(|rest| rest.is_empty() || rest.starts_with(' '))
-                    {
+                    if command_word == "/compact" {
+                        let extra = slash_command
+                            .as_ref()
+                            .map(|command| command.args)
+                            .unwrap_or("");
                         let Some(active_session) = session.as_mut() else {
                             continue;
                         };
@@ -1489,7 +1511,7 @@ async fn run_inner(
                             continue;
                         }
                     }
-                    if command == "/rewind" {
+                    if command_word == "/rewind" {
                         let Some(active_session) = session.as_ref() else {
                             continue;
                         };
@@ -1504,33 +1526,29 @@ async fn run_inner(
                     if let Some(panel) = bottom_panel_for_command(command, &config, &mcp_index) {
                         clear_initializing(&mut transcript);
                         transcript.push(slash_command_line(command));
-                        if command == "/config" {
+                        if command_word == "/config" {
                             transcript.push("  ⎣ Configuration opened...".to_string());
-                        } else if command == "/proxy-setup" {
+                        } else if command_word == "/proxy-setup" {
                             transcript.push("  ⎣ Proxy setup opened...".to_string());
-                        } else if command == "/voice" {
+                        } else if command_word == "/voice" {
                             transcript.push("  ⎣ Voice settings opened...".to_string());
-                        } else if command == "/mcp"
-                            || command == "/connectors"
-                            || command.starts_with("/mcp ")
-                            || command.starts_with("/connectors ")
-                        {
+                        } else if command_word == "/mcp" || command_word == "/connectors" {
                             transcript.push("  ⎣ MCP servers opened...".to_string());
                         }
                         transcript.extend([String::new(), String::new()]);
                         bottom_panel = Some(panel);
                         continue;
                     }
-                    if command == "/log" {
+                    if command_word == "/log" {
                         let Some(active_session) = session.as_ref() else {
                             continue;
                         };
                         bottom_panel = None;
                         clear_initializing(&mut transcript);
-                        transcript.extend(log_lines(&active_session.store));
+                        transcript.extend(log_lines(command, &active_session.store));
                         continue;
                     }
-                    if command == "/copy" {
+                    if command_word == "/copy" {
                         bottom_panel = None;
                         clear_initializing(&mut transcript);
                         transcript.push(slash_command_line(command));
@@ -1559,7 +1577,16 @@ async fn run_inner(
                     }
                     let visible_input =
                         expand_skill_prompt(&submitted).unwrap_or_else(|| submitted.clone());
-                    if let Some(title) = command.strip_prefix("/rename ") {
+                    if command_word == "/rename"
+                        && slash_command.is_some()
+                        && slash_command
+                            .as_ref()
+                            .is_some_and(|command| !command.args.is_empty())
+                    {
+                        let title = slash_command
+                            .as_ref()
+                            .map(|command| command.args)
+                            .unwrap_or("");
                         let Some(active_session) = session.as_mut() else {
                             continue;
                         };
@@ -2999,11 +3026,15 @@ fn bottom_panel_for_command(
     config: &Config,
     mcp_index: &McpIndex,
 ) -> Option<BottomPanel> {
-    match command {
-        "/mcp" | "/connectors" if !config.mcp_servers.is_empty() => Some(mcp_panel(mcp_index)),
-        _ if command.starts_with("/mcp ") || command.starts_with("/connectors ") => {
-            let name = command.split_once(' ')?.1.trim();
-            mcp_detail_panel(mcp_index, name)
+    let slash_command = parse_tui_slash_command(command)?;
+    match slash_command.word.as_str() {
+        "/mcp" | "/connectors"
+            if slash_command.args.is_empty() && !config.mcp_servers.is_empty() =>
+        {
+            Some(mcp_panel(mcp_index))
+        }
+        "/mcp" | "/connectors" if !slash_command.args.is_empty() => {
+            mcp_detail_panel(mcp_index, slash_command.args)
         }
         "/model" => Some(BottomPanel {
             command: "/model".to_string(),
@@ -4840,19 +4871,22 @@ fn short_session_id(session_id: &str) -> String {
 }
 
 fn static_command_lines(command: &str, config: &Config) -> Option<Vec<String>> {
-    let lines = match command {
-        "/status" => status_lines(),
-        "/data-retention" => data_retention_lines(),
-        "/mcp" | "/connectors" => command_message_lines(
+    let slash_command = parse_tui_slash_command(command)?;
+    let lines = match slash_command.word.as_str() {
+        "/status" => status_lines(command),
+        "/data-retention" => data_retention_lines(command),
+        "/mcp" | "/connectors" if slash_command.args.is_empty() => command_message_lines(
             command,
             &["  ⎣ No MCP servers or connectors configured."],
             2,
         ),
-        "/mcp status" | "/connectors status" => mcp_status_lines(command, config),
-        "/mcp login" | "/connectors login" => {
+        "/mcp" | "/connectors" if slash_command.args == "status" => {
+            mcp_status_lines(command, config)
+        }
+        "/mcp" | "/connectors" if slash_command.args == "login" => {
             command_message_lines(command, &["  ⎣ Error: Usage: /mcp login <alias>"], 2)
         }
-        "/mcp logout" | "/connectors logout" => {
+        "/mcp" | "/connectors" if slash_command.args == "logout" => {
             command_message_lines(command, &["  ⎣ Error: Usage: /mcp logout <alias>"], 2)
         }
         "/resume" | "/continue" => {
@@ -6102,9 +6136,9 @@ fn help_lines() -> Vec<String> {
     .collect()
 }
 
-fn status_lines() -> Vec<String> {
+fn status_lines(command: &str) -> Vec<String> {
     [
-        slash_command_line("/status"),
+        slash_command_line(command),
         "  ⎢ Agent Statistics".to_string(),
         "  ⎢ • Steps: 0".to_string(),
         "  ⎢ • Session Prompt Tokens: 0".to_string(),
@@ -6119,9 +6153,9 @@ fn status_lines() -> Vec<String> {
     .collect()
 }
 
-fn data_retention_lines() -> Vec<String> {
+fn data_retention_lines(command: &str) -> Vec<String> {
     [
-        slash_command_line("/data-retention"),
+        slash_command_line(command),
         "  ⎢ Your Data Helps Improve Mistral AI".to_string(),
         "  ⎢ At Mistral AI, we're committed to delivering the best possible experience. When you use Mistral models on our API,".to_string(),
         "  ⎢ your interactions may be collected to improve our models, ensuring they stay cutting-edge, accurate, and helpful.".to_string(),
@@ -6134,10 +6168,10 @@ fn data_retention_lines() -> Vec<String> {
     .collect()
 }
 
-fn log_lines(store: &microvibe_core::SessionStore) -> Vec<String> {
+fn log_lines(command: &str, store: &microvibe_core::SessionStore) -> Vec<String> {
     let (path_prefix, session_suffix) = store.log_path_parts_for_display();
     [
-        slash_command_line("/log"),
+        slash_command_line(command),
         "  ⎢ Current Log Directory".to_string(),
         format!("  ⎢ {path_prefix}"),
         if session_suffix.is_empty() {
@@ -6696,6 +6730,19 @@ mod tests {
         assert!(!is_tui_exit_command(":q"));
         assert!(!is_tui_exit_command(":quit"));
         assert!(!is_tui_exit_command("/quit"));
+    }
+
+    #[test]
+    fn slash_command_parser_splits_word_and_args_like_vibe_registry() {
+        let parsed = parse_tui_slash_command("  /STATUS extra words  ").unwrap();
+        assert_eq!(parsed.word, "/status");
+        assert_eq!(parsed.args, "extra words");
+
+        let parsed = parse_tui_slash_command("/model").unwrap();
+        assert_eq!(parsed.word, "/model");
+        assert_eq!(parsed.args, "");
+
+        assert!(parse_tui_slash_command("exit").is_none());
     }
 
     #[test]

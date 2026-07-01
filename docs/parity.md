@@ -123,6 +123,7 @@ Current TUI gates:
 - `tui_startup_agent_plan`, `tui_startup_agent_custom`, `tui_startup_auto_approve`: `--agent plan`, a custom primary TOML agent, and `--auto-approve` select the same initial visible agent mode as Vibe.
 - `tui_animation_bash_spinner`, `tui_animation_write_file_spinner`, `tui_animation_edit_spinner`, `tui_animation_web_fetch_spinner`, `tui_animation_web_search_spinner`, `tui_animation_task_spinner`, `tui_animation_question_spinner`, `tui_animation_exit_plan_spinner`: forced pending tool or confirmation states capture the raw terminal stream and verify both Vibe and microvibe animate the matching visible status with a rich two-cell braille snake sequence instead of a static or trivial spinner.
 - `tui_help`: `/help` command screen.
+- `tui_help_args`, `tui_status_args`, `tui_data_retention_args`, `tui_reload_args`, `tui_log_args`, `tui_copy_args`, `tui_model_picker_args`, `tui_theme_picker_args`, `tui_thinking_picker_args`, `tui_config_args`, `tui_voice_args`: slash commands parse on the first command word like Vibe's `CommandRegistry`, preserving the typed arguments in the visible command line where Vibe does and ignoring them for handlers that do not consume arguments.
 - `tui_status`: `/status` command screen.
 - `tui_data_retention`: `/data-retention` command message.
 - `tui_debug_command`, `tui_debug_ctrl_backslash`: debug console toggle through `/debug` and global `Ctrl+\`; these use a raw stream projection because current upstream Vibe renders the dock and then emits a Textual traceback in the PTY harness.
